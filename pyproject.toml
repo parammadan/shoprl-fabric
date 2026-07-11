@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shoprl-fabric"
+version = "0.0.1"
+description = "Fault-tolerant RL post-training platform for a shopping recommendation LLM"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+]
+
+# Heavy ML deps live behind an extra so the core (config, interfaces, queue,
+# tests) installs and runs fast on M1 without downloading torch/transformers.
+# vLLM is intentionally NOT here: it does not run on Apple Silicon and is a
+# cloud-only drop-in for the RolloutEngine interface.
+[project.optional-dependencies]
+hf = [
+    "torch>=2.2",
+    "transformers>=4.44",
+    "accelerate>=0.33",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
