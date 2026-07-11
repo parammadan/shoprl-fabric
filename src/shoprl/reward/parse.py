@@ -12,7 +12,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-SKU_RE = re.compile(r"LAP-\d{4}", re.IGNORECASE)
+# Match any LAP-<digits> token as a *claim*; catalog membership (not the regex)
+# decides validity. This way a garbled/invented id like "LAP-00106" is caught
+# as a hallucinated SKU directly, instead of a greedy 4-digit match silently
+# truncating it to a real one.
+SKU_RE = re.compile(r"LAP-\d+", re.IGNORECASE)
 PRICE_RE = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)")
 RAM_RE = re.compile(r"(\d+)\s*GB", re.IGNORECASE)
 WEIGHT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*lbs?", re.IGNORECASE)
