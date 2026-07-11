@@ -11,14 +11,14 @@ See docs repo MODAL_RUN.md for the full walkthrough.
 import modal
 
 REPO = "https://github.com/parammadan/shoprl-fabric.git"
-CONFIG = "configs/grpo_qwen_06b_kaggle.yaml"   # T4-tuned (fp32); works on Modal T4
-CKPT = "checkpoints/step-150"                   # matches config steps=150
+CONFIG = "configs/grpo_qwen_06b_modal.yaml"    # budget run (40 steps) for ~$1 T4 credit
+CKPT = "checkpoints/step-40"                     # matches config steps=40
 HF_REPO = "parammadan/shoprl-fabric-qwen06b-grpo"
 
 # Deps first (CUDA torch on Modal's GPU hosts), then clone + install the package
 # without deps so nothing downgrades torch. Bump CACHE_BUST to force a re-clone
 # after pushing new commits.
-CACHE_BUST = "2026-07-11h"
+CACHE_BUST = "2026-07-11i"
 image = (
     modal.Image.debian_slim(python_version="3.12")  # package requires >=3.12
     .apt_install("git")
@@ -52,25 +52,29 @@ def train(smoke: bool = False):
     cfg = "configs/smoke_gpu.yaml" if smoke else CONFIG
     ckpt = "checkpoints/step-3" if smoke else CKPT
     hf_repo = f"{HF_REPO}-smoke" if smoke else HF_REPO
-    n = "4" if smoke else "32"
+    n = "4" if smoke else "6"   # small held-out eval to stay within budget
 
-    # before (untrained) -> train -> after (trained), same held-out split
+    from huggingface_hub import HfApi, create_repo
+    api = HfApi()
+
+    # before (untrained) -> train -> [push adapter NOW] -> after (trained)
     run("python", "-m", "shoprl.eval.baseline", "--config", cfg,
         "--n-prompts", n, "--num-samples", "4", "--out", "outputs/before.json")
     run("python", "-m", "shoprl.train", "--config", cfg)
+
+    # Budget safety: push the trained adapter immediately after training, BEFORE
+    # spending more credit on the after-eval — so the artifact is safe regardless.
+    create_repo(hf_repo, exist_ok=True, repo_type="model", private=True)
+    api.upload_folder(folder_path=f"/root/shoprl/{ckpt}", repo_id=hf_repo,
+                      commit_message="GRPO smoke" if smoke else "GRPO run 1 (Modal T4)")
+    print(f"pushed adapter -> https://huggingface.co/{hf_repo}")
+
     run("python", "-m", "shoprl.eval.baseline", "--config", cfg,
         "--adapter", ckpt, "--n-prompts", n, "--num-samples", "4",
         "--out", "outputs/after.json")
-
-    # push LoRA checkpoint + eval provenance to HF Hub (HF_TOKEN from the secret)
-    from huggingface_hub import HfApi, create_repo
-    create_repo(hf_repo, exist_ok=True, repo_type="model", private=True)
-    api = HfApi()
-    api.upload_folder(folder_path=f"/root/shoprl/{ckpt}", repo_id=hf_repo,
-                      commit_message="GRPO smoke" if smoke else "GRPO run 1 (Modal T4)")
     api.upload_folder(folder_path="/root/shoprl/outputs", repo_id=hf_repo,
                       path_in_repo="eval")
-    print(f"pushed adapter + eval -> https://huggingface.co/{hf_repo}")
+    print(f"pushed eval -> https://huggingface.co/{hf_repo}")
 
 
 @app.local_entrypoint()

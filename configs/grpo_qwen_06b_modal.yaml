@@ -1,0 +1,35 @@
+# Budget GRPO run for Modal on ~$1 of T4 credit. Short but complete
+# (before -> ~40 steps -> after -> push). Proves the full pipeline on real GPU
+# and yields a real before/after delta. Same memory fixes as the T4 config
+# (fp32, B=4, gradient checkpointing in the trainer, shortlist 4).
+experiment:
+  name: grpo-qwen-0.6b-modal-run1
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: float32
+  device: auto
+
+algorithm: grpo
+
+rollout:
+  engine: hf
+  max_new_tokens: 96
+  temperature: 1.1
+  top_p: 0.95
+  num_samples: 4          # = batch (prompts_per_step 1); B=4 fits T4 w/ grad ckpt
+
+training:
+  steps: 40               # budget-sized: ~20-25 min of training on a T4
+  prompts_per_step: 1
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 4
+  ckpt_dir: checkpoints
+  save_every: 40
