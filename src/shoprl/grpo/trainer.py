@@ -84,6 +84,7 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
     # 3-4. reward each completion; group-relative advantages within each group.
     completions: list[Completion] = []
     rewards_per_group: list[list[float]] = []
+    breakdowns = []
     for ctx, group in zip(contexts, groups):
         grp_rewards = []
         for comp in group.completions:
@@ -91,6 +92,7 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
                                weights=config.rewards.weights,
                                hallucination_penalty=config.rewards.hallucination_penalty)
             grp_rewards.append(r.total)
+            breakdowns.append(r)
             completions.append(comp)
         rewards_per_group.append(grp_rewards)
     advantages_nested = batch_group_advantages(rewards_per_group)
@@ -125,6 +127,11 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
     )
     optimizer.step()
 
+    comp_means = {
+        f"reward_{k}": statistics.mean(getattr(b, k) for b in breakdowns)
+        for k in ("budget", "groundedness", "coverage",
+                  "quality_format", "quality_comparison")
+    }
     return {
         "reward_mean": statistics.mean(flat_rewards),
         "reward_std": statistics.pstdev(flat_rewards) if len(flat_rewards) > 1 else 0.0,
@@ -134,6 +141,8 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
         "grad_norm": float(grad_norm),
         "clip_frac": stats.clip_fraction,
         "ratio": stats.mean_ratio,
+        "hallucination_rate": sum(b.hallucinated for b in breakdowns) / len(breakdowns),
+        **comp_means,
     }
 
 
@@ -167,9 +176,20 @@ def run_training(config: Config) -> str:
         (p for p in model.parameters() if p.requires_grad), lr=tr.lr
     )
 
+    # Structured metrics log (append per step so a run can be watched live and
+    # survives interruption). This is what the observability dashboard reads.
+    run_dir = os.path.join("runs", config.experiment.name)
+    os.makedirs(run_dir, exist_ok=True)
+    metrics_path = os.path.join(run_dir, "metrics.jsonl")
+    open(metrics_path, "w").close()  # fresh file per run
+    print(f"[trainer] metrics -> {metrics_path}")
+
     for step in range(tr.steps):
         m = train_step(config, model, tokenizer, engine, catalog, idx, examples,
                        device, step)
+        m["step"] = step
+        with open(metrics_path, "a") as f:
+            f.write(json.dumps(m) + "\n")
         print(
             f"step {step:>2} | reward {m['reward_mean']:+.3f}±{m['reward_std']:.3f} "
             f"| loss {m['loss']:+.4f} | kl {m['kl']:.4f} | entropy {m['entropy']:.3f} "

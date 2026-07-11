@@ -39,6 +39,7 @@ def main() -> None:
     ap.add_argument("--n-prompts", type=int, default=4)
     ap.add_argument("--num-samples", type=int, default=None, help="overrides config")
     ap.add_argument("--max-new-tokens", type=int, default=None, help="overrides config")
+    ap.add_argument("--temperature", type=float, default=None, help="overrides config")
     ap.add_argument("--catalog-size", type=int, default=300)
     ap.add_argument("--shortlist", type=int, default=6)
     ap.add_argument("--seed", type=int, default=0)
@@ -50,6 +51,8 @@ def main() -> None:
     num_samples = args.num_samples or cfg.rollout.num_samples
     if args.max_new_tokens:
         cfg.rollout.max_new_tokens = args.max_new_tokens
+    if args.temperature is not None:
+        cfg.rollout.temperature = args.temperature
 
     # Same seed as generation -> catalog used for scoring matches the prompts.
     catalog = generate_catalog(n=args.catalog_size, seed=args.seed)
