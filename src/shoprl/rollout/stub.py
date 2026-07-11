@@ -33,7 +33,7 @@ class StubRolloutEngine(RolloutEngine):
         for i, prompt in enumerate(prompts):
             # Seed per (engine seed, prompt index) so results are deterministic
             # yet differ across prompts.
-            rng = random.Random((self.seed, i))
+            rng = random.Random(f"{self.seed}-{i}")
             comps: list[Completion] = []
             for _ in range(num_samples):
                 template = rng.choice(_CANNED)

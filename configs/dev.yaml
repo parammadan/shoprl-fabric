@@ -1,0 +1,18 @@
+# Dev experiment: tiny model, HF generate, runs on M1 (MPS).
+# One YAML fully describes an experiment — this is the only thing you edit to
+# launch a run.
+experiment:
+  name: shoprl-dev
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: auto
+  device: auto        # -> mps on M1, cuda on cloud GPU, else cpu
+
+rollout:
+  engine: hf          # stub | hf | vllm(cloud)
+  max_new_tokens: 64
+  temperature: 0.8
+  top_p: 0.95
+  num_samples: 4      # GRPO group size

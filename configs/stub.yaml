@@ -1,0 +1,13 @@
+# Plumbing config: no ML deps, deterministic. Used for tests and for smoke-
+# testing the pipeline end to end without downloading a model.
+experiment:
+  name: shoprl-stub
+  seed: 0
+
+model:
+  name: none
+  device: cpu
+
+rollout:
+  engine: stub
+  num_samples: 4
