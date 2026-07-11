@@ -1,3 +1,5 @@
+import pytest
+
 from shoprl.reward import response_quality
 
 
@@ -32,5 +34,23 @@ def test_comparison_rewards_multiple_and_language(ctx):
 
 def test_single_pick_has_lower_comparison(ctx):
     _, comp = response_quality("I recommend LAP-0001.", ctx)
-    # One rec (breadth 0.5), no comparison language (factor 0.6) -> 0.3.
-    assert comp == 0.3
+    # One rec (breadth 0.5), no language, no dims -> 0.5 * (0.4 + 0) = 0.2.
+    assert comp == pytest.approx(0.2)
+
+
+def test_comparison_is_graded_substantive_beats_bare(ctx):
+    # Two well-formed recs but no comparison prose -> breadth only (0.4 floor).
+    bare = (
+        "REC: LAP-0001 | $900 | 16GB | 3.0lbs | 12hrs | good\n"
+        "REC: LAP-0003 | $700 | 32GB | 2.5lbs | 15hrs | good"
+    )
+    _, bare_comp = response_quality(bare, ctx)
+    # Same two recs, but the reasoning actually compares on dimensions.
+    rich = (
+        "REC: LAP-0001 | $900 | 16GB | 3.0lbs | 12hrs | pricier but longer battery\n"
+        "REC: LAP-0003 | $700 | 32GB | 2.5lbs | 15hrs | cheaper and lighter"
+    )
+    _, rich_comp = response_quality(rich, ctx)
+    assert bare_comp == pytest.approx(0.4)      # breadth 1.0 * 0.4 floor
+    assert rich_comp > bare_comp                 # substance is rewarded
+    assert rich_comp == pytest.approx(1.0)       # language + 2 dims

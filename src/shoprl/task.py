@@ -57,9 +57,21 @@ def build_task_prompt(
             f"- {sku}: {p.name} | ${p.price:.0f} | {p.ram_gb}GB RAM | "
             f"{p.weight_lbs}lbs | {p.battery_hrs}hrs battery | {p.brand}"
         )
+    # Concrete example + explicit stop instruction: cuts the hallucination tail
+    # (garbles happen in rambling trailing text) and nudges toward a substantive
+    # comparison (which the reward now grades).
+    example_sku = shortlist[0]
+    ep = catalog[example_sku]
     lines += [
         "",
-        "Reply with one line per recommendation, in EXACTLY this format:",
+        "Recommend the 2 best options. Copy each product's SKU and specs EXACTLY "
+        "from the catalog, and in the reason compare them on price, RAM, weight, "
+        "or battery. Output ONLY the REC lines, then stop.",
+        "",
+        "Format (one line per recommendation):",
         REC_FORMAT,
+        "Example:",
+        f"REC: {example_sku} | ${ep.price:.0f} | {ep.ram_gb}GB | {ep.weight_lbs}lbs "
+        f"| {ep.battery_hrs}hrs | cheaper and lighter than the alternative",
     ]
     return "\n".join(lines)

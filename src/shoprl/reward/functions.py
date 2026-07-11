@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from shoprl.data.catalog import Product
 from shoprl.data.prompts import satisfies
-from shoprl.reward.parse import ParsedRec, parse_response
+from shoprl.reward.parse import SKU_RE, ParsedRec, parse_response
 
 # Tolerances for judging whether a *stated* spec matches the catalog. Price and
 # weight get slack for rounding ("$1299" vs 1299.00); RAM/battery are integers.
@@ -24,13 +24,19 @@ _WEIGHT_TOL = 0.1
 
 # Words that signal the response actually compared options (for quality).
 _COMPARISON_WORDS = (
-    "compared", "comparison", "whereas", "however", "better", "best",
-    "versus", " vs", "trade-off", "tradeoff", "on the other hand", "while",
+    "compared", "comparison", "whereas", "however", "better", "best", "than",
+    "versus", " vs", "trade-off", "tradeoff", "on the other hand", "while", "but",
 )
 
-# Comparison score multiplier when no comparative language is present but the
-# response still recommends products (partial credit).
-_NO_COMPARISON_FACTOR = 0.6
+# Constraint dimensions a *substantive* comparison talks about. Scored on the
+# reasoning prose only (not the structured spec fields), so these words signal
+# the model actually reasoned about a trade-off, not just restated a number.
+_DIM_KEYWORDS = {
+    "price": ("price", "cheap", "expensive", "budget", "cost", "afford", "value", "pricier"),
+    "ram": ("ram", "memory"),
+    "weight": ("weight", "light", "heav", "portab"),
+    "battery": ("battery", "hour", "charge", "lasts", "lasting"),
+}
 
 
 @dataclass
@@ -115,16 +121,34 @@ def attribute_coverage(response: str, ctx: RewardContext) -> float:
     return ok / len(grounded)
 
 
+def _reasoning_text(response: str) -> str:
+    """The free-text reasoning, EXCLUDING structured spec fields.
+
+    For a `REC: SKU | $.. | ..GB | .. | reason` line we keep only the trailing
+    reason; for a free-form line we keep it whole. This way dimension words
+    ("lighter", "battery") are counted only when the model actually reasons
+    about a trade-off — not because the REC line restated "$/GB/lbs/hrs".
+    """
+    parts: list[str] = []
+    for line in response.splitlines():
+        if SKU_RE.search(line):
+            parts.append(line.split("|")[-1] if "|" in line else line)
+        else:
+            parts.append(line)
+    return " ".join(parts).lower()
+
+
 # --- 4. response_quality (format + comparison) ---------------------------
 def response_quality(response: str, ctx: RewardContext) -> tuple[float, float]:
     """Returns (format, comparison), each in [0, 1].
 
     format: are recommendations parseable and fully specified? Mean over recs
-      of (specs_stated / 4). Rewards citing a SKU with all four specs — which
-      is exactly what makes the response machine-checkable.
-    comparison: did it help the user choose? Recommending >=2 products earns
-      full breadth; comparative language earns the rest. A single bare pick
-      scores low."""
+      of (specs_stated / 4) — exactly what makes the response machine-checkable.
+    comparison: did it help the user choose? Graded and substantive:
+      breadth (need >=2 products) x content, where content rewards comparative
+      language AND referencing >=2 distinct spec dimensions in the reasoning.
+      Continuous by design so it injects gradient into otherwise-flat groups
+      where budget/coverage/groundedness are already saturated."""
     recs = parse_response(response)
     if not recs:
         return 0.0, 0.0
@@ -132,8 +156,19 @@ def response_quality(response: str, ctx: RewardContext) -> tuple[float, float]:
     fmt = sum(r.num_specs_stated / 4 for r in recs) / len(recs)
 
     grounded = _grounded(recs, ctx)
+    if not grounded:
+        return fmt, 0.0
     breadth = min(len(grounded), 2) / 2  # 0.5 for one, 1.0 for two+
-    has_comparison = any(w in response.lower() for w in _COMPARISON_WORDS)
-    comparison = breadth * (1.0 if has_comparison else _NO_COMPARISON_FACTOR)
+
+    reasoning = _reasoning_text(response)
+    has_language = any(w in reasoning for w in _COMPARISON_WORDS)
+    n_dims = sum(
+        1 for kws in _DIM_KEYWORDS.values() if any(k in reasoning for k in kws)
+    )
+    dim_score = min(n_dims, 2) / 2  # referencing >=2 dimensions = substantive
+    content = 0.5 * (1.0 if has_language else 0.0) + 0.5 * dim_score
+    # Floor of 0.4 so a bare well-formed pick still gets partial breadth credit;
+    # substantive comparison earns up to 1.0.
+    comparison = breadth * (0.4 + 0.6 * content)
 
     return fmt, comparison
