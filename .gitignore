@@ -5,12 +5,13 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-# checkpoints / artifacts (pushed to HF Hub, not git)
-checkpoints/
-outputs/
-runs/
-data/
+# checkpoints / artifacts (pushed to HF Hub, not git). Anchored to repo root
+# with a leading slash so they DON'T match source packages like src/shoprl/data.
+/checkpoints/
+/outputs/
+/runs/
+/data/
 # docs live in the separate private repo shoprl-fabric-docs
-docs/
+/docs/
 *.log
 .DS_Store
