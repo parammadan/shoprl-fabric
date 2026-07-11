@@ -100,6 +100,7 @@ class HFRolloutEngine(RolloutEngine):
                 top_p=rc.top_p,
                 max_new_tokens=rc.max_new_tokens,
                 num_return_sequences=num_samples,
+                use_cache=True,  # KV cache for fast rollout (training sets config off)
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 

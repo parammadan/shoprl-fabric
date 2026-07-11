@@ -58,6 +58,15 @@ def build_policy(config: Config):
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(base, lora).to(device)
+
+    # Gradient checkpointing: recompute layer activations during backward instead
+    # of storing them. The attention activations scale with T^2 across all layers
+    # and were the real OOM cause on the 16GB T4 (our task prompt is long); this
+    # trades ~30% compute for a large memory cut. use_cache must be off for it;
+    # the rollout engine re-enables the KV cache per generate() call.
+    model.config.use_cache = False
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.enable_input_require_grads()  # so grads flow with the frozen base
     return model, tokenizer, device
 
 

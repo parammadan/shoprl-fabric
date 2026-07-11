@@ -35,7 +35,7 @@ training:
   lora_r: 16
   lora_alpha: 32
   catalog_size: 300
-  shortlist: 8
+  shortlist: 4            # shorter prompt -> smaller T -> less attention memory
   ckpt_dir: checkpoints
   save_every: 25          # checkpoint often (Kaggle sessions time out at 12h)
 
