@@ -10,5 +10,7 @@ checkpoints/
 outputs/
 runs/
 data/
+# docs live in the separate private repo shoprl-fabric-docs
+docs/
 *.log
 .DS_Store
