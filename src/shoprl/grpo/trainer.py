@@ -176,6 +176,9 @@ def run_training(config: Config) -> str:
             f"| grad_norm {m['grad_norm']:.3f} | clipfrac {m['clip_frac']:.2f} "
             f"| ratio {m['ratio']:.3f}"
         )
+        # Periodic checkpoint = spot-interruption safety on cloud GPU.
+        if (step + 1) % tr.save_every == 0 and (step + 1) < tr.steps:
+            save_checkpoint(model, config, step + 1)
 
     path = save_checkpoint(model, config, tr.steps)
     print(f"[trainer] saved checkpoint -> {path}")

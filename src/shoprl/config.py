@@ -55,6 +55,9 @@ class TrainingConfig(BaseModel):
     catalog_size: int = 300
     shortlist: int = 6
     ckpt_dir: str = "checkpoints"
+    # Save a checkpoint every N steps (spot-interruption safety on cloud GPU),
+    # in addition to a final save. Large default -> smoke saves only at the end.
+    save_every: int = 50
 
 
 class RewardConfig(BaseModel):
