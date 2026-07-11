@@ -97,7 +97,7 @@ def evaluate(config, n_prompts, num_samples, max_new_tokens=None, out=None,
         "hallucination_rate": sum(b.hallucinated for b in breakdowns) / n,
     }
 
-    print("\n=== BASELINE (untrained) ===")
+    print(f"\n=== EVAL ({'trained' if adapter else 'untrained'}) ===")
     print(f"  reward mean {result['reward_mean']:+.3f} ± {result['reward_std']:.3f} "
           f"(min {result['reward_min']:+.3f}, max {result['reward_max']:+.3f})")
     for k, v in components.items():
