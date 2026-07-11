@@ -9,10 +9,10 @@ model) and scaled to cloud GPU in short bursts.
 
 ## Why this exists
 
-It's a portfolio project modeling the kind of RL training infrastructure a team like
-Amazon SFAI builds: verifiable rewards, a critic-free policy-gradient loop (GRPO),
-memory-frugal training (LoRA), and an engine interface that swaps HF `generate`
-(laptop) for vLLM (GPU) without touching the learner.
+A portfolio project modeling production-style RL training infrastructure:
+verifiable rewards, a critic-free policy-gradient loop (GRPO), memory-frugal
+training (LoRA), and an engine interface that swaps HF `generate` (laptop) for
+vLLM (GPU) without touching the learner.
 
 ## Task & reward (verifiable, no reward model)
 
@@ -83,15 +83,10 @@ pytest -q                    # full suite (model-free, fast)
 docker build -t shoprl-fabric . && docker run --rm shoprl-fabric   # tests in a clean env
 ```
 
-## Status
+## Roadmap
 
-**Month 1 — single-node lifecycle: complete.** Config-driven GRPO loop wired end to
-end (rollout → reward → advantages → KL → clipped loss → LoRA update → checkpoint),
-verifiable reward layer, within-group-variance instrumentation, untrained baseline,
-Docker + tests.
-
-**Next (Month 2):** first real GRPO training run on AWS spot GPU (Qwen3-0.6B), then
-the multi-process "fabric" (queue + rollout workers + learner) with checkpoint/resume
+Single-node lifecycle (config-driven GRPO loop end to end, verifiable reward
+layer, within-group-variance instrumentation, untrained baseline, Docker + tests)
+is in place. Next: the first real GRPO training run on a cloud spot GPU, then a
+multi-process "fabric" (queue + rollout workers + learner) with checkpoint/resume
 for spot-interruption fault tolerance.
-
-Detailed dev log lives in a separate private docs repo.
