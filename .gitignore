@@ -9,5 +9,6 @@ dist/
 checkpoints/
 outputs/
 runs/
+data/
 *.log
 .DS_Store
