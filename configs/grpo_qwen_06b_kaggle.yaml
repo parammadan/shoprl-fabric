@@ -24,10 +24,10 @@ rollout:
 
 training:
   steps: 150
-  # B = prompts_per_step * num_samples = 16 sequences. Keeps the [B,T,152k]
-  # logits tensor (~4GB fp32 at T~380) well within 16GB, with room for the
-  # reference forward + backward. Raise if VRAM headroom allows.
-  prompts_per_step: 2
+  # B = prompts_per_step * num_samples = 8 sequences. fp32 policy+reference
+  # forwards each materialize a [B,T,152k] logits tensor and backward retains
+  # activations; B=16 OOM'd a 16GB T4, B=8 peaks ~7-8GB. Raise only with more VRAM.
+  prompts_per_step: 1
   lr: 1.0e-5
   clip_eps: 0.2
   beta: 0.04              # KL coeff — first lever if text degrades / KL climbs

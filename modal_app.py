@@ -18,7 +18,7 @@ HF_REPO = "parammadan/shoprl-fabric-qwen06b-grpo"
 # Deps first (CUDA torch on Modal's GPU hosts), then clone + install the package
 # without deps so nothing downgrades torch. Bump CACHE_BUST to force a re-clone
 # after pushing new commits.
-CACHE_BUST = "2026-07-11e"
+CACHE_BUST = "2026-07-11f"
 image = (
     modal.Image.debian_slim(python_version="3.12")  # package requires >=3.12
     .apt_install("git")
@@ -36,10 +36,14 @@ app = modal.App("shoprl-grpo", image=image)
 @app.function(gpu="T4", timeout=60 * 60 * 4,
               secrets=[modal.Secret.from_name("huggingface")])
 def train(smoke: bool = False):
+    import os
     import subprocess
 
+    # Reduce CUDA fragmentation OOMs on the 16GB T4.
+    env = {**os.environ, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+
     def run(*args):
-        subprocess.run(list(args), cwd="/root/shoprl", check=True)
+        subprocess.run(list(args), cwd="/root/shoprl", check=True, env=env)
 
     import torch
     print("cuda:", torch.cuda.is_available(), torch.cuda.get_device_name(0))
