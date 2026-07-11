@@ -104,14 +104,17 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
     input_ids, attn, cmask = build_batch(completions, tokenizer.pad_token_id, device)
     mask_shift = cmask[:, 1:]
 
+    # Reference forward FIRST, under no_grad, and free its logits before the
+    # policy forward. This keeps the two [B,T,vocab] logits tensors from
+    # coexisting -> roughly halves the logits memory peak (critical on a 16GB T4).
+    with torch.no_grad():
+        with model.disable_adapter():  # LoRA off -> frozen reference
+            logp_ref, ref_logits = _policy_logprobs(model, input_ids, attn)
+        del ref_logits
+
     model.train()
     logp_policy, logits = _policy_logprobs(model, input_ids, attn)
     entropy = mean_entropy(logits, mask_shift)
-
-    with torch.no_grad():
-        with model.disable_adapter():  # LoRA off -> frozen reference
-            logp_ref, _ = _policy_logprobs(model, input_ids, attn)
-
     logp_old = logp_policy.detach()  # single step/batch -> ratio == 1
 
     # 6. loss -> backward -> clip -> step.

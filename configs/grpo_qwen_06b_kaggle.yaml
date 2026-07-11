@@ -17,10 +17,10 @@ algorithm: grpo
 
 rollout:
   engine: hf              # T4 is plenty fast for 0.6B generate; vLLM later
-  max_new_tokens: 128
+  max_new_tokens: 96      # shorter seq -> smaller logits (T4 memory)
   temperature: 1.1        # higher temp -> within-group spread (avoids flat groups)
   top_p: 0.95
-  num_samples: 8          # GRPO group size
+  num_samples: 4          # GRPO group size (=batch, since prompts_per_step=1); B=4 fits T4 fp32
 
 training:
   steps: 150

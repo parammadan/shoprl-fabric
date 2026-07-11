@@ -18,7 +18,7 @@ HF_REPO = "parammadan/shoprl-fabric-qwen06b-grpo"
 # Deps first (CUDA torch on Modal's GPU hosts), then clone + install the package
 # without deps so nothing downgrades torch. Bump CACHE_BUST to force a re-clone
 # after pushing new commits.
-CACHE_BUST = "2026-07-11f"
+CACHE_BUST = "2026-07-11g"
 image = (
     modal.Image.debian_slim(python_version="3.12")  # package requires >=3.12
     .apt_install("git")
