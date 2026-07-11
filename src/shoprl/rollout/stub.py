@@ -28,12 +28,15 @@ class StubRolloutEngine(RolloutEngine):
     def __init__(self, seed: int = 0):
         self.seed = seed
 
-    def generate(self, prompts: list[str], num_samples: int) -> list[RolloutGroup]:
+    def generate(
+        self, prompts: list[str], num_samples: int, seed: int | None = None
+    ) -> list[RolloutGroup]:
+        base = self.seed if seed is None else seed
         groups: list[RolloutGroup] = []
         for i, prompt in enumerate(prompts):
-            # Seed per (engine seed, prompt index) so results are deterministic
+            # Seed per (base seed, prompt index) so results are deterministic
             # yet differ across prompts.
-            rng = random.Random(f"{self.seed}-{i}")
+            rng = random.Random(f"{base}-{i}")
             comps: list[Completion] = []
             for _ in range(num_samples):
                 template = rng.choice(_CANNED)

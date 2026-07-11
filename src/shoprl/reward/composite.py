@@ -47,7 +47,16 @@ class RewardBreakdown:
         return asdict(self)
 
 
-def compute_reward(response: str, ctx: RewardContext) -> RewardBreakdown:
+def compute_reward(
+    response: str,
+    ctx: RewardContext,
+    weights: dict[str, float] | None = None,
+    hallucination_penalty: float | None = None,
+) -> RewardBreakdown:
+    # Config may override the weights/penalty; default to the module constants.
+    w = weights if weights is not None else WEIGHTS
+    penalty = hallucination_penalty if hallucination_penalty is not None else HALLUCINATION_PENALTY
+
     budget = budget_compliance(response, ctx)
     groundedness = catalog_groundedness(response, ctx)
     coverage = attribute_coverage(response, ctx)
@@ -55,12 +64,12 @@ def compute_reward(response: str, ctx: RewardContext) -> RewardBreakdown:
     hallucinated = is_hallucinated(response, ctx)
 
     total = (
-        WEIGHTS["budget"] * budget
-        + WEIGHTS["groundedness"] * groundedness
-        + WEIGHTS["coverage"] * coverage
-        + WEIGHTS["quality_format"] * fmt
-        + WEIGHTS["quality_comparison"] * comparison
-        - HALLUCINATION_PENALTY * (1.0 if hallucinated else 0.0)
+        w["budget"] * budget
+        + w["groundedness"] * groundedness
+        + w["coverage"] * coverage
+        + w["quality_format"] * fmt
+        + w["quality_comparison"] * comparison
+        - penalty * (1.0 if hallucinated else 0.0)
     )
 
     return RewardBreakdown(

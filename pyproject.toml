@@ -21,6 +21,7 @@ hf = [
     "torch>=2.2",
     "transformers>=4.44",
     "accelerate>=0.33",
+    "peft>=0.11",
 ]
 dev = [
     "pytest>=8.0",

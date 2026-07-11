@@ -1,0 +1,44 @@
+# Canonical GRPO config — launches the whole loop:
+#   python -m shoprl.train --config configs/grpo_qwen_06b.yaml
+# Defaults are M1-safe (8GB). To scale on an AWS A10G, raise steps,
+# prompts_per_step, num_samples, and max_new_tokens (see comments).
+experiment:
+  name: grpo-qwen-0.6b
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: auto
+  device: auto            # mps on M1, cuda on the GPU box
+
+algorithm: grpo           # grpo | rloo | ppo (grpo implemented)
+
+rollout:
+  engine: hf              # swap to vllm on GPU for fast rollout
+  max_new_tokens: 32      # GPU: 128+
+  temperature: 0.9
+  top_p: 0.95
+  num_samples: 4          # GRPO group size. GPU: 8-16
+
+training:
+  steps: 3                # GPU: hundreds
+  prompts_per_step: 1     # GPU: 8-32
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04              # KL penalty coefficient
+  max_grad_norm: 1.0
+  lora_r: 8               # GPU: 16-32
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 6
+  ckpt_dir: checkpoints
+
+rewards:
+  # Composite weights (sum of positives = 1.0) + hallucination penalty.
+  weights:
+    budget: 0.25
+    groundedness: 0.25
+    coverage: 0.25
+    quality_format: 0.15
+    quality_comparison: 0.10
+  hallucination_penalty: 0.50

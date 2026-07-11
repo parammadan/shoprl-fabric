@@ -40,10 +40,46 @@ class RolloutConfig(BaseModel):
     num_samples: int = Field(default=4, ge=1)
 
 
+class TrainingConfig(BaseModel):
+    # Kept tiny by default so the whole loop runs on an 8GB M1. Scale on GPU.
+    steps: int = Field(default=3, ge=1)
+    prompts_per_step: int = Field(default=1, ge=1)  # groups per optimizer step
+    lr: float = 1e-5
+    clip_eps: float = 0.2       # PPO trust-region width
+    beta: float = 0.04          # KL penalty coefficient
+    max_grad_norm: float = 1.0
+    # LoRA: only these adapter params get gradients + optimizer state.
+    lora_r: int = 8
+    lora_alpha: int = 16
+    # Task/data knobs for building rollout prompts.
+    catalog_size: int = 300
+    shortlist: int = 6
+    ckpt_dir: str = "checkpoints"
+
+
+class RewardConfig(BaseModel):
+    # Composite weights (must be paired with the reward functions). Defaults
+    # mirror shoprl.reward.composite so behavior is unchanged unless overridden.
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "budget": 0.25,
+            "groundedness": 0.25,
+            "coverage": 0.25,
+            "quality_format": 0.15,
+            "quality_comparison": 0.10,
+        }
+    )
+    hallucination_penalty: float = 0.50
+
+
 class Config(BaseModel):
     experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
+    # Which RL algorithm the unified entry point dispatches to.
+    algorithm: Literal["grpo", "rloo", "ppo"] = "grpo"
     rollout: RolloutConfig = Field(default_factory=RolloutConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
+    rewards: RewardConfig = Field(default_factory=RewardConfig)
 
 
 def load_config(path: str | Path) -> Config:

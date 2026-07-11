@@ -1,0 +1,31 @@
+# Tiny end-to-end GRPO run — the whole loop launches from this one file.
+# Sized to run on an 8GB M1 with Qwen3-0.6B + LoRA. Scale on GPU by raising
+# steps / prompts_per_step / num_samples / max_new_tokens.
+experiment:
+  name: shoprl-grpo-dev
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: auto
+  device: auto        # mps on M1
+
+rollout:
+  engine: hf
+  max_new_tokens: 32  # short completions keep memory + time down on M1
+  temperature: 0.9
+  top_p: 0.95
+  num_samples: 4      # GRPO group size (>=2 needed for within-group advantages)
+
+training:
+  steps: 3
+  prompts_per_step: 1 # 1 group/step -> batch = num_samples = 4 sequences
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 6
+  ckpt_dir: checkpoints

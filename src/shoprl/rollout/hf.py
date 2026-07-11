@@ -33,18 +33,26 @@ def _resolve_dtype(requested: str, device: str) -> torch.dtype:
 
 
 class HFRolloutEngine(RolloutEngine):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, model=None, tokenizer=None):
+        """If `model`/`tokenizer` are given, sample from THAT model (e.g. the
+        trainer's live policy) instead of loading a fresh one — so the same
+        weights we update are the ones we roll out from."""
         self.config = config
         self.device = _resolve_device(config.model.device)
         self.dtype = _resolve_dtype(config.model.dtype, self.device)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model.name)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.model = AutoModelForCausalLM.from_pretrained(
-            config.model.name, dtype=self.dtype
-        ).to(self.device)
-        self.model.eval()
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(config.model.name)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+        self.tokenizer = tokenizer
+
+        if model is None:
+            model = AutoModelForCausalLM.from_pretrained(
+                config.model.name, dtype=self.dtype
+            ).to(self.device)
+            model.eval()  # only force eval when we own the model
+        self.model = model
 
     def _format(self, prompt: str) -> str:
         """Wrap a raw prompt as a chat turn if the tokenizer has a template.
@@ -70,9 +78,11 @@ class HFRolloutEngine(RolloutEngine):
         return prompt
 
     @torch.no_grad()
-    def generate(self, prompts: list[str], num_samples: int) -> list[RolloutGroup]:
-        # Seed so a given config reproduces the same rollouts.
-        torch.manual_seed(self.config.experiment.seed)
+    def generate(
+        self, prompts: list[str], num_samples: int, seed: int | None = None
+    ) -> list[RolloutGroup]:
+        # Seed for reproducibility; callers vary it per step to get fresh samples.
+        torch.manual_seed(self.config.experiment.seed if seed is None else seed)
         rc = self.config.rollout
 
         groups: list[RolloutGroup] = []

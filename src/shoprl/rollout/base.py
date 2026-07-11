@@ -44,6 +44,12 @@ class RolloutEngine(ABC):
     """
 
     @abstractmethod
-    def generate(self, prompts: list[str], num_samples: int) -> list[RolloutGroup]:
-        """Return one RolloutGroup per prompt, each with `num_samples` completions."""
+    def generate(
+        self, prompts: list[str], num_samples: int, seed: int | None = None
+    ) -> list[RolloutGroup]:
+        """Return one RolloutGroup per prompt, each with `num_samples` completions.
+
+        `seed` lets a caller vary sampling across calls (e.g. per training step)
+        or fix it for reproducibility. None = use the engine's own default.
+        """
         raise NotImplementedError
