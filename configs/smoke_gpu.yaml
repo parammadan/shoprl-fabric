@@ -1,0 +1,33 @@
+# GPU smoke — validates the whole GRPO loop on a cloud GPU (Modal T4) cheaply
+# before committing credits to the full run. 3 steps, tiny batch, fp32.
+experiment:
+  name: shoprl-grpo-gpu-smoke
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: float32          # T4 has no bf16
+  device: auto            # -> cuda on Modal
+
+algorithm: grpo
+
+rollout:
+  engine: hf
+  max_new_tokens: 32
+  temperature: 1.1
+  top_p: 0.95
+  num_samples: 4
+
+training:
+  steps: 3
+  prompts_per_step: 1
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 4
+  ckpt_dir: checkpoints
+  save_every: 50

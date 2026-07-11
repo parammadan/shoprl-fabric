@@ -18,7 +18,7 @@ HF_REPO = "parammadan/shoprl-fabric-qwen06b-grpo"
 # Deps first (CUDA torch on Modal's GPU hosts), then clone + install the package
 # without deps so nothing downgrades torch. Bump CACHE_BUST to force a re-clone
 # after pushing new commits.
-CACHE_BUST = "2026-07-11"
+CACHE_BUST = "2026-07-11b"
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("git")
@@ -35,7 +35,7 @@ app = modal.App("shoprl-grpo", image=image)
 
 @app.function(gpu="T4", timeout=60 * 60 * 4,
               secrets=[modal.Secret.from_name("huggingface")])
-def train():
+def train(smoke: bool = False):
     import subprocess
 
     def run(*args):
@@ -44,25 +44,31 @@ def train():
     import torch
     print("cuda:", torch.cuda.is_available(), torch.cuda.get_device_name(0))
 
+    # smoke = cheap end-to-end validation (3 steps, tiny eval, isolated HF repo).
+    cfg = "configs/smoke_gpu.yaml" if smoke else CONFIG
+    ckpt = "checkpoints/step-3" if smoke else CKPT
+    hf_repo = f"{HF_REPO}-smoke" if smoke else HF_REPO
+    n = "4" if smoke else "32"
+
     # before (untrained) -> train -> after (trained), same held-out split
-    run("python", "-m", "shoprl.eval.baseline", "--config", CONFIG,
-        "--n-prompts", "32", "--num-samples", "8", "--out", "outputs/before.json")
-    run("python", "-m", "shoprl.train", "--config", CONFIG)
-    run("python", "-m", "shoprl.eval.baseline", "--config", CONFIG,
-        "--adapter", CKPT, "--n-prompts", "32", "--num-samples", "8",
+    run("python", "-m", "shoprl.eval.baseline", "--config", cfg,
+        "--n-prompts", n, "--num-samples", "4", "--out", "outputs/before.json")
+    run("python", "-m", "shoprl.train", "--config", cfg)
+    run("python", "-m", "shoprl.eval.baseline", "--config", cfg,
+        "--adapter", ckpt, "--n-prompts", n, "--num-samples", "4",
         "--out", "outputs/after.json")
 
     # push LoRA checkpoint + eval provenance to HF Hub (HF_TOKEN from the secret)
     from huggingface_hub import HfApi, create_repo
-    create_repo(HF_REPO, exist_ok=True, repo_type="model")
+    create_repo(hf_repo, exist_ok=True, repo_type="model")
     api = HfApi()
-    api.upload_folder(folder_path=f"/root/shoprl/{CKPT}", repo_id=HF_REPO,
-                      commit_message="GRPO run 1 (Modal T4)")
-    api.upload_folder(folder_path="/root/shoprl/outputs", repo_id=HF_REPO,
+    api.upload_folder(folder_path=f"/root/shoprl/{ckpt}", repo_id=hf_repo,
+                      commit_message="GRPO smoke" if smoke else "GRPO run 1 (Modal T4)")
+    api.upload_folder(folder_path="/root/shoprl/outputs", repo_id=hf_repo,
                       path_in_repo="eval")
-    print(f"pushed adapter + eval -> https://huggingface.co/{HF_REPO}")
+    print(f"pushed adapter + eval -> https://huggingface.co/{hf_repo}")
 
 
 @app.local_entrypoint()
-def main():
-    train.remote()
+def main(smoke: bool = False):
+    train.remote(smoke=smoke)
