@@ -1,0 +1,49 @@
+# First REAL GRPO run — Kaggle T4 (16GB, Turing).
+#   python -m shoprl.train --config configs/grpo_qwen_06b_kaggle.yaml
+# Uses the hardened comparison reward + task prompt (in code) and higher
+# sampling temperature. Tuned for a 16GB T4; see KAGGLE_RUN.md for gotchas.
+experiment:
+  name: grpo-qwen-0.6b-kaggle-run1
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  # fp32 on purpose: T4 (Turing) has NO bf16 hardware, and our trainer has no
+  # fp16 GradScaler, so fp16 risks NaNs. 0.6B in fp32 fits 16GB comfortably.
+  dtype: float32
+  device: auto            # -> cuda (T4)
+
+algorithm: grpo
+
+rollout:
+  engine: hf              # T4 is plenty fast for 0.6B generate; vLLM later
+  max_new_tokens: 128
+  temperature: 1.1        # higher temp -> within-group spread (avoids flat groups)
+  top_p: 0.95
+  num_samples: 8          # GRPO group size
+
+training:
+  steps: 150
+  # B = prompts_per_step * num_samples = 16 sequences. Keeps the [B,T,152k]
+  # logits tensor (~4GB fp32 at T~380) well within 16GB, with room for the
+  # reference forward + backward. Raise if VRAM headroom allows.
+  prompts_per_step: 2
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04              # KL coeff — first lever if text degrades / KL climbs
+  max_grad_norm: 1.0
+  lora_r: 16
+  lora_alpha: 32
+  catalog_size: 300
+  shortlist: 8
+  ckpt_dir: checkpoints
+  save_every: 25          # checkpoint often (Kaggle sessions time out at 12h)
+
+rewards:
+  weights:
+    budget: 0.25
+    groundedness: 0.25
+    coverage: 0.25
+    quality_format: 0.15
+    quality_comparison: 0.10
+  hallucination_penalty: 0.50

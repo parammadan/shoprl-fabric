@@ -24,7 +24,28 @@ from shoprl.task import build_shortlist, build_task_prompt
 HELDOUT_SEED_OFFSET = 777  # disjoint from training prompts (seed=experiment.seed)
 
 
-def evaluate(config, n_prompts, num_samples, max_new_tokens=None, out=None) -> dict:
+def _trained_engine(config, adapter: str):
+    """Build a rollout engine whose policy is base + trained LoRA adapter,
+    so we can eval the TRAINED model on the same held-out split."""
+    import torch
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from shoprl.rollout.hf import HFRolloutEngine, _resolve_device, _resolve_dtype
+
+    device = _resolve_device(config.model.device)
+    dtype = _resolve_dtype(config.model.dtype, device)
+    tok = AutoTokenizer.from_pretrained(config.model.name)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    base = AutoModelForCausalLM.from_pretrained(config.model.name, dtype=dtype)
+    model = PeftModel.from_pretrained(base, adapter).to(device)
+    model.eval()
+    return HFRolloutEngine(config, model=model, tokenizer=tok)
+
+
+def evaluate(config, n_prompts, num_samples, max_new_tokens=None, out=None,
+             adapter=None) -> dict:
     if max_new_tokens:
         config.rollout.max_new_tokens = max_new_tokens
 
@@ -40,9 +61,10 @@ def evaluate(config, n_prompts, num_samples, max_new_tokens=None, out=None) -> d
         task_prompts.append(build_task_prompt(ex, idx, sl))
         contexts.append(RewardContext(catalog=idx, constraints=ex.constraints))
 
-    print(f"[baseline] model={config.model.name} (UNTRAINED) held-out prompts="
+    phase = "trained" if adapter else "UNTRAINED"
+    print(f"[baseline] model={config.model.name} ({phase}) held-out prompts="
           f"{len(examples)} samples/prompt={num_samples}")
-    engine = build_engine(config)
+    engine = _trained_engine(config, adapter) if adapter else build_engine(config)
     groups = engine.generate(task_prompts, num_samples, seed=seed)
 
     breakdowns = []
@@ -63,7 +85,8 @@ def evaluate(config, n_prompts, num_samples, max_new_tokens=None, out=None) -> d
     }
     result = {
         "model": config.model.name,
-        "phase": "baseline_untrained",
+        "phase": "trained" if adapter else "baseline_untrained",
+        "adapter": adapter,
         "n_completions": n,
         "held_out_seed": seed + HELDOUT_SEED_OFFSET,
         "reward_mean": statistics.mean(totals),
@@ -96,9 +119,12 @@ def main() -> None:
     ap.add_argument("--num-samples", type=int, default=4)
     ap.add_argument("--max-new-tokens", type=int, default=None)
     ap.add_argument("--out", default="outputs/baseline.json")
+    ap.add_argument("--adapter", default=None,
+                    help="path to a trained LoRA adapter -> eval the TRAINED model")
     args = ap.parse_args()
     config = load_config(args.config)
-    evaluate(config, args.n_prompts, args.num_samples, args.max_new_tokens, args.out)
+    evaluate(config, args.n_prompts, args.num_samples, args.max_new_tokens, args.out,
+             adapter=args.adapter)
 
 
 if __name__ == "__main__":
