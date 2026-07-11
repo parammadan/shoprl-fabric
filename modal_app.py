@@ -60,7 +60,7 @@ def train(smoke: bool = False):
 
     # push LoRA checkpoint + eval provenance to HF Hub (HF_TOKEN from the secret)
     from huggingface_hub import HfApi, create_repo
-    create_repo(hf_repo, exist_ok=True, repo_type="model")
+    create_repo(hf_repo, exist_ok=True, repo_type="model", private=True)
     api = HfApi()
     api.upload_folder(folder_path=f"/root/shoprl/{ckpt}", repo_id=hf_repo,
                       commit_message="GRPO smoke" if smoke else "GRPO run 1 (Modal T4)")
