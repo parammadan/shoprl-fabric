@@ -13,7 +13,9 @@ GPU memory, reward variance, stability failures).
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 import statistics
 import time
 from abc import ABC, abstractmethod
@@ -68,6 +70,7 @@ class RLTrainer(ABC):
     def calculate_rewards(self, groups, contexts):
         completions: list[Completion] = []
         rewards_per_group: list[list[float]] = []
+        breakdowns = []
         for ctx, group in zip(contexts, groups):
             grp = []
             for comp in group.completions:
@@ -75,9 +78,20 @@ class RLTrainer(ABC):
                                    weights=self.config.rewards.weights,
                                    hallucination_penalty=self.config.rewards.hallucination_penalty)
                 grp.append(r.total)
+                breakdowns.append(r)
                 completions.append(comp)
             rewards_per_group.append(grp)
-        return completions, rewards_per_group
+        return completions, rewards_per_group, breakdowns
+
+    @staticmethod
+    def _reward_components(breakdowns) -> dict:
+        """Per-component reward means + hallucination rate, for the dashboard's
+        component/hallucination panels (all algorithms)."""
+        n = len(breakdowns)
+        keys = ("budget", "groundedness", "coverage", "quality_format", "quality_comparison")
+        out = {f"reward_{k}": sum(getattr(b, k) for b in breakdowns) / n for k in keys}
+        out["hallucination_rate"] = sum(b.hallucinated for b in breakdowns) / n
+        return out
 
     # --- ALGORITHM-SPECIFIC ---------------------------------------------
     @abstractmethod
@@ -140,16 +154,25 @@ class RLTrainer(ABC):
     def train(self) -> list[dict]:
         metrics = []
         n_tokens = 0
+        # metrics.jsonl (one row per step, appended live) — same schema the
+        # legacy trainer wrote, so the dashboard + alerts work for all algorithms.
+        run_dir = os.path.join("runs", self.config.experiment.name)
+        os.makedirs(run_dir, exist_ok=True)
+        self.metrics_path = os.path.join(run_dir, "metrics.jsonl")
+        open(self.metrics_path, "w").close()
         t0 = time.time()
         if self.device == "cuda":
             torch.cuda.reset_peak_memory_stats()
         for step in range(self.tr.steps):
             groups, contexts = self.generate_rollouts(step)
-            completions, rewards_per_group = self.calculate_rewards(groups, contexts)
+            completions, rewards_per_group, breakdowns = self.calculate_rewards(groups, contexts)
             n_tokens += sum(len(c.completion_token_ids) for c in completions)
             m = self.optimize(completions, rewards_per_group)
+            m.update(self._reward_components(breakdowns))
             m["step"] = step
             metrics.append(m)
+            with open(self.metrics_path, "a") as f:
+                f.write(json.dumps(m) + "\n")
             print(f"[{self.name}] step {step:>2} | reward {m['reward_mean']:+.3f}"
                   f"±{m['reward_std']:.3f} | kl {m['kl']:.4f} | entropy {m['entropy']:.3f}"
                   f" | grad_norm {m['grad_norm']:.3f}")
