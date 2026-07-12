@@ -32,8 +32,10 @@ class VLLMRolloutEngine(RolloutEngine):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         dtype = config.model.dtype if config.model.dtype != "auto" else "auto"
+        # Modest memory fraction so vLLM can COEXIST with the HF LoRA trainer on
+        # one GPU during the benchmark (0.6B is tiny; ~half of 24GB is ample).
         self.llm = model or LLM(model=config.model.name, dtype=dtype,
-                                gpu_memory_utilization=0.85)
+                                gpu_memory_utilization=0.5)
 
     def _format(self, prompt: str) -> str:
         if getattr(self.tokenizer, "chat_template", None):

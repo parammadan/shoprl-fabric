@@ -59,6 +59,13 @@ def _parallel_rewards(groups, contexts, cfg, workers):
 def benchmark(config, steps: int, reward_workers: int = 1,
               pack: bool = False, async_rollout: bool = False) -> dict:
     trainer = build_trainer(config)
+    # For a non-hf rollout engine (vLLM), swap in a factory-built engine so the
+    # rollout phase actually measures that backend. vLLM keeps its own base-model
+    # copy (the documented on-policy weight-sync gap) — valid for a rollout
+    # THROUGHPUT benchmark; the LoRA optimize still runs on the HF model.
+    if config.rollout.engine != "hf":
+        from shoprl.rollout.factory import build_engine
+        trainer.engine = build_engine(config)
     pt = PhaseTimer()
     pad_id = trainer.tokenizer.pad_token_id
     device = trainer.device
