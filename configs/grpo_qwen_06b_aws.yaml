@@ -1,44 +1,43 @@
-# First REAL GRPO training run — AWS spot GPU (g5.xlarge / A10G 24GB).
+# First REAL GRPO training run — AWS spot g5.xlarge (A10G 24GB).
 #   python -m shoprl.train --config configs/grpo_qwen_06b_aws.yaml
-# Every hyperparameter below has a rationale comment. This is a deliberate,
-# modest first run: enough steps to see the reward curve move, small enough to
-# fit ~$5-10 of credits. Scale up once the dynamics look healthy.
+# Sized for the A10G with the memory lessons from the T4 baked in: fp32 (the
+# validated path; 24GB has ample room), gradient checkpointing (in the trainer),
+# and a batch that fits comfortably. Modest first run (~1hr / ~$0.50 spot).
 experiment:
   name: grpo-qwen-0.6b-aws-run1
   seed: 0
 
 model:
   name: Qwen/Qwen3-0.6B
-  dtype: auto          # -> bfloat16 on CUDA (fast, stable on A10G)
+  dtype: float32       # validated path; A10G 24GB fits it easily w/ grad ckpt
   device: auto         # -> cuda
 
 algorithm: grpo
 
 rollout:
-  engine: hf           # hf generate is fine for 0.6B on GPU; vLLM is the
-                       # next upgrade for faster rollout (rollout dominates time)
-  max_new_tokens: 128  # room for 1-2 full REC lines + reasoning (M1 used 24-32)
-  temperature: 1.0     # enough sampling diversity for within-group spread
-  top_p: 0.95          # (GRPO signal dies if a group's samples are identical)
-  num_samples: 8       # GRPO group size. 8 balances advantage-estimate quality
-                       # vs rollout cost; the baseline used it too.
+  engine: hf           # hf generate is fine for 0.6B on GPU; vLLM is the next
+                       # rollout-speed upgrade
+  max_new_tokens: 128  # room for 1-2 full REC lines + reasoning
+  temperature: 1.0     # sampling diversity for within-group spread
+  top_p: 0.95
+  num_samples: 8       # GRPO group size
 
 training:
-  steps: 200           # modest first run; reward curve should be visible well
-                       # before this. Checkpoints every save_every steps.
-  prompts_per_step: 8  # 8 groups x 8 samples = 64 completions/optimizer step
-  lr: 1.0e-5           # conservative LoRA LR for RL; higher risks KL blow-up
-  clip_eps: 0.2        # standard PPO trust-region width
-  beta: 0.04           # KL coeff (DeepSeekMath GRPO default). Watch it: if KL
-                       # climbs and text degrades, raise; if policy won't move,
-                       # lower. First lever to tune.
-  max_grad_norm: 1.0   # clip exploding grads
-  lora_r: 16           # more capacity than the M1 smoke (r=8); still tiny
-  lora_alpha: 32       # 2x r, conventional
+  steps: 100           # modest first run; reward curve should show before this
+  # B = prompts_per_step * num_samples = 16. With gradient checkpointing + the
+  # ref-forward-first reorder, this sits well within 24GB (T4 OOM'd at fp32
+  # only because of T^2 attention activations, now recomputed not stored).
+  prompts_per_step: 2
+  lr: 1.0e-5           # conservative LoRA LR for RL
+  clip_eps: 0.2
+  beta: 0.04           # KL coeff (DeepSeekMath default); first lever to tune
+  max_grad_norm: 1.0
+  lora_r: 16
+  lora_alpha: 32
   catalog_size: 300
-  shortlist: 8
+  shortlist: 6
   ckpt_dir: checkpoints
-  save_every: 25       # spot-interruption safety: persist every 25 steps
+  save_every: 25       # spot-interruption safety
 
 rewards:
   weights:
