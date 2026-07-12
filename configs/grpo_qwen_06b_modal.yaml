@@ -21,8 +21,8 @@ rollout:
   num_samples: 4          # = batch (prompts_per_step 1); B=4 fits T4 w/ grad ckpt
 
 training:
-  steps: 40               # budget-sized: ~20-25 min of training on a T4
-  prompts_per_step: 1
+  steps: 30               # budget verification run (~$0.20 on T4)
+  prompts_per_step: 2     # 2 groups/step -> steadier gradient (B=8, fits w/ grad ckpt)
   lr: 1.0e-5
   clip_eps: 0.2
   beta: 0.04

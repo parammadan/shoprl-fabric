@@ -12,13 +12,13 @@ import modal
 
 REPO = "https://github.com/parammadan/shoprl-fabric.git"
 CONFIG = "configs/grpo_qwen_06b_modal.yaml"    # budget run (40 steps) for ~$1 T4 credit
-CKPT = "checkpoints/step-40"                     # matches config steps=40
+CKPT = "checkpoints/step-30"                     # matches config steps=30
 HF_REPO = "parammadan/shoprl-fabric-qwen06b-grpo"
 
 # Deps first (CUDA torch on Modal's GPU hosts), then clone + install the package
 # without deps so nothing downgrades torch. Bump CACHE_BUST to force a re-clone
 # after pushing new commits.
-CACHE_BUST = "2026-07-11i"
+CACHE_BUST = "2026-07-12a"
 image = (
     modal.Image.debian_slim(python_version="3.12")  # package requires >=3.12
     .apt_install("git")

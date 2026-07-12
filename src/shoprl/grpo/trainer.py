@@ -86,6 +86,14 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
         task_prompts.append(build_task_prompt(ex, idx, sl))
         contexts.append(RewardContext(catalog=idx, constraints=ex.constraints))
 
+    # Rollout in EVAL mode with checkpointing OFF. Gradient checkpointing is a
+    # training-forward optimization; if left on during generate() it force-nulls
+    # the KV cache every decode step and corrupts autoregressive decoding ->
+    # near-random tokens -> flat rewards -> zero gradient. (This was THE bug: the
+    # model was generating in train() mode, so rollouts were garbage while eval,
+    # which uses .eval(), scored fine.)
+    model.gradient_checkpointing_disable()
+    model.eval()
     # Fresh samples each step (vary the seed).
     groups = engine.generate(task_prompts, config.rollout.num_samples,
                              seed=config.experiment.seed + step + 1)
@@ -109,7 +117,10 @@ def train_step(config, model, tokenizer, engine, catalog, idx, examples, device,
                               dtype=torch.float32, device=device)
     flat_rewards = [r for grp in rewards_per_group for r in grp]
 
-    # 5. batch + forward passes.
+    # 5. batch + forward passes. Back to train mode + checkpointing ON so the
+    # policy backward is memory-safe on the GPU.
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.train()
     input_ids, attn, cmask = build_batch(completions, tokenizer.pad_token_id, device)
     mask_shift = cmask[:, 1:]
 
