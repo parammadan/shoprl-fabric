@@ -1,0 +1,39 @@
+# Fair comparison config — ppo. IDENTICAL across grpo/rloo/ppo except the
+# algorithm field, so the comparison isolates the advantage/critic mechanism.
+# Regime = the one that learned in Session 5 (30 steps, bf16, B=8, beta 0.04);
+# 100 steps over-optimized (KL climbed, held-out flat).
+experiment:
+  name: compare-ppo
+  seed: 0
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: bfloat16        # A10G/T4-safe path used for the working runs
+  device: auto
+algorithm: ppo
+rollout:
+  engine: hf
+  max_new_tokens: 128
+  temperature: 1.0
+  top_p: 0.95
+  num_samples: 8         # group size (same rollouts for all 3 -> fair)
+training:
+  steps: 30              # the regime that learned; NOT 100 (over-optimized)
+  prompts_per_step: 1    # B = 8
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04             # KL coeff (same leash for all 3)
+  max_grad_norm: 1.0
+  lora_r: 16
+  lora_alpha: 32
+  catalog_size: 300
+  shortlist: 6
+  ckpt_dir: checkpoints/ppo
+  save_every: 30
+rewards:
+  weights:
+    budget: 0.25
+    groundedness: 0.25
+    coverage: 0.25
+    quality_format: 0.15
+    quality_comparison: 0.10
+  hallucination_penalty: 0.50

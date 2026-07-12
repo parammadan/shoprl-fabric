@@ -1,0 +1,32 @@
+# KL/steps sweep — GRPO at 50 steps. Identical to the others except 'steps',
+# so steps vs reward-gain vs KL is a clean comparison. bf16, B=8, beta 0.04.
+experiment:
+  name: sweep-grpo-50
+  seed: 0
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: bfloat16
+  device: auto
+algorithm: grpo
+rollout:
+  engine: hf
+  max_new_tokens: 128
+  temperature: 1.0
+  top_p: 0.95
+  num_samples: 8         # group size (B = 8)
+training:
+  steps: 50
+  prompts_per_step: 1
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04
+  max_grad_norm: 1.0
+  lora_r: 16
+  lora_alpha: 32
+  catalog_size: 300
+  shortlist: 6
+  ckpt_dir: checkpoints/sweep_50
+  save_every: 50
+rewards:
+  weights: {budget: 0.25, groundedness: 0.25, coverage: 0.25, quality_format: 0.15, quality_comparison: 0.10}
+  hallucination_penalty: 0.50
