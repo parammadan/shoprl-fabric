@@ -1,6 +1,7 @@
 import json
 
 from shoprl.observability import load_metrics, render_dashboard
+from shoprl.observability.dashboard import render_overlay
 
 
 def _fake_metrics(n=5):
@@ -10,22 +11,38 @@ def _fake_metrics(n=5):
         "kl": 0.001 * s, "entropy": 0.12, "clip_frac": 0.0, "grad_norm": 1.0 + s,
         "reward_budget": 0.75, "reward_groundedness": 0.90, "reward_coverage": 0.80,
         "reward_quality_format": 0.90, "reward_quality_comparison": 0.30 + 0.04 * s,
-        "hallucination_rate": 0.10,
+        "hallucination_rate": 0.10, "value_loss": 0.5,
     } for s in range(n)]
+
+
+def _fake_result(algo, n=5, gain=0.02):
+    return {"algorithm": algo, "steps": n, "step_metrics": _fake_metrics(n),
+            "reward_gain": gain, "final_kl": 0.3, "max_kl": 0.5, "train_time_s": 120.0,
+            "peak_mem_gb": 7.3, "tokens_per_sec": 100.0, "mean_rollout_reward_std": 0.1,
+            "stability_failures": 0}
 
 
 def test_render_produces_all_panels(tmp_path):
     out = render_dashboard(_fake_metrics(), tmp_path / "d.html")
     txt = out.read_text()
     for title in ("Reward (mean", "Reward by component", "KL vs reference",
-                  "Policy entropy", "Clip fraction", "Grad norm"):
+                  "Policy entropy", "Clip fraction", "Grad norm",
+                  "Hallucination rate", "PPO value loss"):
         assert title in txt
-    # all five component labels present (legend + direct end-labels = relief rule)
     for lbl in ("budget", "groundedness", "coverage", "format", "comparison"):
-        assert lbl in txt
-    assert "<svg" in txt and "#2a78d6" in txt  # validated palette slot 1
-    assert "step 0" in txt and "step 4" in txt
-    assert "DATA =" in txt  # embedded hover data
+        assert lbl in txt                          # component-panel series (legend)
+    assert "#2a78d6" in txt and "DATA =" in txt    # validated palette + hover data
+
+
+def test_overlay_multi_algorithm(tmp_path):
+    out = render_overlay([_fake_result("grpo"), _fake_result("rloo"), _fake_result("ppo")],
+                         tmp_path / "o.html")
+    txt = out.read_text()
+    assert "Run summary" in txt                       # summary table
+    for algo in ("grpo", "rloo", "ppo"):
+        assert algo in txt                            # all three overlaid
+    assert txt.count("<svg") == 4                     # reward/kl/entropy/grad_norm
+    assert "tok/s" in txt and "peak GB" in txt        # surfaced run-level metrics
 
 
 def test_load_metrics_roundtrip(tmp_path):

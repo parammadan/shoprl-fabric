@@ -43,6 +43,8 @@ _SINGLE = [
     ("entropy", "Policy entropy"),
     ("clip_frac", "Clip fraction"),
     ("grad_norm", "Grad norm"),
+    ("hallucination_rate", "Hallucination rate"),
+    ("value_loss", "PPO value loss"),   # 0 for GRPO/RLOO (critic-free)
 ]
 
 W, H = 380, 170
@@ -260,18 +262,89 @@ document.querySelectorAll('.plot').forEach(function(svg){{
 </script></body></html>"""
 
 
+# --- multi-algorithm overlay (comparison view) --------------------------
+_OVERLAY_METRICS = [("reward_mean", "Reward"), ("kl", "KL vs reference"),
+                    ("entropy", "Entropy"), ("grad_norm", "Grad norm")]
+_SUMMARY_FIELDS = [("reward_gain", "gain", "{:+.3f}"), ("final_kl", "final KL", "{:.3f}"),
+                   ("max_kl", "max KL", "{:.3f}"), ("train_time_s", "time s", "{:.0f}"),
+                   ("peak_mem_gb", "peak GB", "{:.1f}"), ("tokens_per_sec", "tok/s", "{:.1f}"),
+                   ("mean_rollout_reward_std", "rollout std", "{:.3f}"),
+                   ("stability_failures", "fails", "{}")]
+
+
+def render_overlay(results: list[dict], out_path: str | Path,
+                   title: str = "ShopRL Fabric — algorithm comparison") -> Path:
+    """Overlay each metric across algorithms + a run-summary table. `results` =
+    shoprl.rl.run result dicts (algorithm + step_metrics + run-level fields).
+    Series can differ in length (e.g. a steps sweep) — each is placed on the
+    shared step axis by its own index."""
+    colors = [(lc, dc) for _, lc, dc in _CATEGORICAL]  # reuse validated palette by slot
+    labels = [r.get("algorithm", f"run{i}") for i, r in enumerate(results)]
+    max_len = max((len(r.get("step_metrics", [])) for r in results), default=1)
+    steps = list(range(max_len))
+
+    panels, hover = [], {}
+    for key, ttl in _OVERLAY_METRICS:
+        series = []
+        for i, r in enumerate(results):
+            vals = [float(m.get(key, 0.0)) for m in r.get("step_metrics", [])]
+            lc, dc = colors[i % len(colors)]
+            series.append((labels[i], lc, dc, vals))
+        legend = "".join(
+            f'<span class="lg"><i style="background:{colors[i%len(colors)][0]}" '
+            f'data-dc="{colors[i%len(colors)][1]}"></i>{html.escape(labels[i])}</span>'
+            for i in range(len(results)))
+        panels.append((ttl, _panel_svg(key, steps, series, padr=PADR_COMP), legend))
+        hover[key] = {"steps": steps, "series": [{"label": labels[i],
+                      "values": [float(m.get(key, 0.0)) for m in results[i].get("step_metrics", [])]}
+                      for i in range(len(results))]}
+
+    # run-summary table as a card
+    head = "".join(f"<th>{lbl}</th>" for _, lbl, _ in _SUMMARY_FIELDS)
+    body = ""
+    for r in results:
+        cells = ""
+        for field, _lbl, spec in _SUMMARY_FIELDS:
+            v = r.get(field)
+            cells += f"<td>{'n/a' if v is None else spec.format(v)}</td>"
+        body += f"<tr><td><b>{html.escape(r.get('algorithm','?'))}</b></td>{cells}</tr>"
+    table = (f'<figure class="card" style="grid-column:1/-1"><figcaption>Run summary</figcaption>'
+             f'<table class="summ"><tr><th>algo</th>{head}</tr>{body}</table></figure>')
+
+    cards = table + "".join(
+        f'<figure class="card"><figcaption>{html.escape(t)}</figcaption>'
+        f'<div class=legend>{lg}</div>{svg}</figure>' for t, svg, lg in panels)
+    doc = _TEMPLATE.format(title=html.escape(title), n_steps=max_len,
+                           cards=cards, data=json.dumps(hover))
+    doc = doc.replace("</style>", ".summ{border-collapse:collapse;font-size:12px;width:100%}"
+                      ".summ th,.summ td{border:1px solid var(--ring);padding:4px 8px;"
+                      "text-align:right;font-variant-numeric:tabular-nums}</style>")
+    out = Path(out_path); out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(doc)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="shoprl.observability.dashboard")
-    ap.add_argument("--metrics", required=True, help="path to metrics.jsonl")
-    ap.add_argument("--out", default=None, help="output html (default: alongside metrics)")
-    ap.add_argument("--title", default="ShopRL Fabric — training run")
+    ap.add_argument("--metrics", help="metrics.jsonl -> single-run dashboard")
+    ap.add_argument("--overlay", nargs="+", help="result JSONs -> multi-algorithm overlay")
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--title", default=None)
     args = ap.parse_args()
-    metrics = load_metrics(args.metrics)
-    if not metrics:
-        raise SystemExit(f"no metrics in {args.metrics}")
-    out = args.out or str(Path(args.metrics).with_name("dashboard.html"))
-    path = render_dashboard(metrics, out, title=args.title)
-    print(f"[dashboard] {len(metrics)} steps -> {path}")
+    if args.overlay:
+        results = [json.loads(Path(p).read_text()) for p in args.overlay]
+        out = args.out or "runs/overlay.html"
+        path = render_overlay(results, out, title=args.title or "ShopRL Fabric — algorithm comparison")
+        print(f"[overlay] {len(results)} runs -> {path}")
+    elif args.metrics:
+        metrics = load_metrics(args.metrics)
+        if not metrics:
+            raise SystemExit(f"no metrics in {args.metrics}")
+        out = args.out or str(Path(args.metrics).with_name("dashboard.html"))
+        path = render_dashboard(metrics, out, title=args.title or "ShopRL Fabric — training run")
+        print(f"[dashboard] {len(metrics)} steps -> {path}")
+    else:
+        ap.error("provide --metrics or --overlay")
 
 
 if __name__ == "__main__":
