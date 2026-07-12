@@ -9,7 +9,8 @@ experiment:
 
 model:
   name: Qwen/Qwen3-0.6B
-  dtype: float32       # validated path; A10G 24GB fits it easily w/ grad ckpt
+  dtype: bfloat16      # A10G supports bf16 natively; halves memory, stable w/o
+                       # a GradScaler (unlike fp16). B=8 bf16 -> huge 24GB margin.
   device: auto         # -> cuda
 
 algorithm: grpo
