@@ -19,8 +19,7 @@ def build_engine(config: Config) -> RolloutEngine:
 
         return HFRolloutEngine(config)
     if kind == "vllm":
-        raise NotImplementedError(
-            "vLLM engine is the cloud-GPU drop-in; not available on M1. "
-            "Use engine: hf locally."
-        )
+        from shoprl.rollout.vllm import VLLMRolloutEngine  # lazy: GPU-only (needs vllm)
+
+        return VLLMRolloutEngine(config)
     raise ValueError(f"Unknown rollout engine: {kind!r}")
