@@ -24,10 +24,11 @@ rollout:
 
 training:
   steps: 100           # modest first run; reward curve should show before this
-  # B = prompts_per_step * num_samples = 16. With gradient checkpointing + the
-  # ref-forward-first reorder, this sits well within 24GB (T4 OOM'd at fp32
-  # only because of T^2 attention activations, now recomputed not stored).
-  prompts_per_step: 2
+  # B = prompts_per_step * num_samples = 8. NOTE: B=16 fp32 OOM'd the A10G 24GB
+  # — the [B,T,152k] LM-head logits + their gradient (~8GB at B=16) are NOT saved
+  # by gradient checkpointing (that only helps transformer-layer activations).
+  # B=8 fits with margin; for a bigger batch use dtype: bfloat16 (A10G supports it).
+  prompts_per_step: 1
   lr: 1.0e-5           # conservative LoRA LR for RL
   clip_eps: 0.2
   beta: 0.04           # KL coeff (DeepSeekMath default); first lever to tune
