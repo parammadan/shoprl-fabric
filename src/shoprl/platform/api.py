@@ -42,9 +42,10 @@ from shoprl.platform.policy import (PolicyNotFound, PolicyRegistry,
                                     PolicyVersion, staleness_report)
 from shoprl.platform.registry import (ExperimentRegistry, RunNotFound,
                                       RunRecord, RunStatus)
-from shoprl.platform.traj_store import TrajectoryStore
+from shoprl.platform.scheduler import ResourceConfig, Scheduler
 from shoprl.platform.store import ConcurrentModification, JobNotFound, JobStore
-from shoprl.platform.traj_store import TrajectoryNotFound
+from shoprl.platform.traj_store import TrajectoryNotFound, TrajectoryStore
+from shoprl.observability import alerts as alerts_mod
 
 
 # --- request / response schemas -------------------------------------------
@@ -63,14 +64,17 @@ class JobOut(BaseModel):
     attempts: int
     max_attempts: int
     error: str | None
+    resource: str
+    priority: int
     created_at: float
     updated_at: float
 
     @classmethod
     def of(cls, j: Job) -> "JobOut":
         return cls(id=j.id, kind=j.kind, state=j.state.value, payload=j.payload,
-                   attempts=j.attempts, max_attempts=j.max_attempts,
-                   error=j.error, created_at=j.created_at, updated_at=j.updated_at)
+                   attempts=j.attempts, max_attempts=j.max_attempts, error=j.error,
+                   resource=j.resource, priority=j.priority,
+                   created_at=j.created_at, updated_at=j.updated_at)
 
 
 class RunMetricsOut(BaseModel):
@@ -131,6 +135,18 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
         s = _job_store()
         try:
             return JobOut.of(s.create(body.kind, body.payload, body.max_attempts))
+        finally:
+            s.close()
+
+    @app.get("/jobs", response_model=list[JobOut])
+    def list_jobs(state: JobState | None = None, resource: str | None = None,
+                  limit: int = 200):
+        s = _job_store()
+        try:
+            jobs = s.list(state=state)
+            if resource:
+                jobs = [j for j in jobs if j.resource == resource]
+            return [JobOut.of(j) for j in jobs[:limit]]
         finally:
             s.close()
 
@@ -334,6 +350,63 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
             return dash_data.trajectory_detail(root, traj_id)
         except TrajectoryNotFound:
             raise HTTPException(404, f"trajectory {traj_id} not found")
+
+    # --- operational reads (for the ops console) -------------------------
+    @app.get("/scheduler")
+    def scheduler_status() -> dict:
+        s = _job_store()
+        try:
+            return Scheduler(s, ResourceConfig()).status()
+        finally:
+            s.close()
+
+    @app.get("/overview")
+    def overview() -> dict:
+        """The operational snapshot: job counts, reward-by-policy, checkpoints
+        (+ integrity), recovery events, pipeline metrics. Read-only."""
+        return dash_data.snapshot(root)
+
+    @app.get("/checkpoints")
+    def checkpoints() -> list[dict]:
+        return dash_data.snapshot(root)["checkpoints"]
+
+    @app.get("/trajectories")
+    def list_trajectories(limit: int = 200) -> list[dict]:
+        out = []
+        for t in dash_data.trajectories(root, limit):
+            out.append({"id": t.id, "policy_id": t.lineage.policy_id,
+                        "reward": t.reward, "kind": t.kind})
+        return out
+
+    @app.get("/runs/{run_id}/alerts")
+    def run_alerts(run_id: str) -> dict:
+        if "/" in run_id or run_id in ("", ".", ".."):
+            raise HTTPException(400, "invalid run_id")
+        path = runs_dir / run_id / "metrics.jsonl"
+        if not path.exists():
+            raise HTTPException(404, f"no metrics for run {run_id}")
+        rows = [json.loads(l) for l in path.open() if l.strip()]
+        active = []
+        for m in rows:
+            for a in alerts_mod.check_step(m):
+                active.append({"level": a.level, "rule": a.rule,
+                               "message": a.message, "step": a.step, "value": a.value})
+        return {"run_id": run_id, "n_alerts": len(active),
+                "max_level": alerts_mod.max_level(
+                    [alerts_mod.Alert(a["level"], a["rule"], a["message"]) for a in active]),
+                "alerts": active}
+
+    # --- DEV-mode fault injection (SIMULATION) ---------------------------
+    @app.post("/dev/kill-worker")
+    def dev_kill_worker() -> dict:
+        return dash_data.sim_kill_worker(root)
+
+    @app.post("/dev/replay/{traj_id}")
+    def dev_replay(traj_id: str) -> dict:
+        r = dash_data.sim_duplicate_trajectory(root, traj_id)
+        if not r.get("ok"):
+            raise HTTPException(404, r.get("error", "cannot replay"))
+        return r
 
     @app.get("/health")
     def health() -> dict:
