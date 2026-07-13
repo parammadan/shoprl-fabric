@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 
-from shoprl.bench.profiler import PhaseTimer, padding_waste
+from shoprl.bench.profiler import PhaseTimer, padding_waste, rollout_metrics
 from shoprl.config import load_config
 from shoprl.grpo.logprobs import build_batch
 from shoprl.reward import compute_reward
@@ -57,7 +57,8 @@ def _parallel_rewards(groups, contexts, cfg, workers):
 
 
 def benchmark(config, steps: int, reward_workers: int = 1,
-              pack: bool = False, async_rollout: bool = False) -> dict:
+              pack: bool = False, async_rollout: bool = False,
+              rollout_only: bool = False) -> dict:
     trainer = build_trainer(config)
     # For a non-hf rollout engine (vLLM), swap in a factory-built engine so the
     # rollout phase actually measures that backend. vLLM keeps its own base-model
@@ -70,6 +71,7 @@ def benchmark(config, steps: int, reward_workers: int = 1,
     pad_id = trainer.tokenizer.pad_token_id
     device = trainer.device
     total_tokens = 0
+    n_completions = 0
     pad_def, pad_pack = [], []
     ex = ThreadPoolExecutor(max_workers=1) if async_rollout else None
     prefetch = None
@@ -91,6 +93,7 @@ def benchmark(config, steps: int, reward_workers: int = 1,
                 completions, rpg, _bd = trainer.calculate_rewards(groups, contexts)
 
         total_tokens += sum(len(c.completion_token_ids) for c in completions)
+        n_completions += len(completions)
 
         # padding-waste: default order vs length-bucketed (lever b)
         _, attn, _ = build_batch(completions, pad_id, device)
@@ -100,13 +103,19 @@ def benchmark(config, steps: int, reward_workers: int = 1,
         _, attn_p, _ = build_batch(packed, pad_id, device)
         pad_pack.append(padding_waste(attn_p))
 
-        with pt.phase("optimize"):
-            trainer.optimize(completions, rpg)
+        if not rollout_only:
+            with pt.phase("optimize"):
+                trainer.optimize(completions, rpg)
 
     if ex:
         ex.shutdown(wait=False)
 
     rep = pt.report(total_tokens)
+    # rollout throughput/latency for the HF-vs-vLLM comparison
+    rollout_seconds = pt.times.get("rollout", 0.0) + pt.times.get("rollout_wait", 0.0)
+    rep.update(rollout_metrics(
+        n_completions, rollout_seconds, steps, rep["total_s"],
+        ttft_ms=getattr(trainer.engine, "last_ttft_ms", None)))
     rep["padding_waste"] = round(statistics.mean(pad_def), 3)
     rep["padding_waste_packed"] = round(statistics.mean(pad_pack), 3)
     rep["peak_mem_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 2) if device == "cuda" else None
@@ -115,6 +124,7 @@ def benchmark(config, steps: int, reward_workers: int = 1,
         "batch": config.training.prompts_per_step * config.rollout.num_samples,
         "engine": config.rollout.engine, "dtype": config.model.dtype, "device": device,
         "reward_workers": reward_workers, "pack": pack, "async_rollout": async_rollout,
+        "rollout_only": rollout_only,
     }
     return rep
 
@@ -126,17 +136,25 @@ def main() -> None:
     ap.add_argument("--reward-workers", type=int, default=1)
     ap.add_argument("--pack", action="store_true")
     ap.add_argument("--async-rollout", action="store_true")
+    ap.add_argument("--rollout-only", action="store_true",
+                    help="skip the optimize phase — pure rollout-throughput "
+                         "benchmark (lets the vLLM leg run in an isolated env)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     config = load_config(args.config)
     rep = benchmark(config, args.steps, reward_workers=args.reward_workers,
-                    pack=args.pack, async_rollout=args.async_rollout)
+                    pack=args.pack, async_rollout=args.async_rollout,
+                    rollout_only=args.rollout_only)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(rep, f, indent=2)
     print(f"[bench] total {rep['total_s']}s | tok/s {rep.get('tokens_per_sec')} | "
-          f"pad {rep['padding_waste']}->{rep['padding_waste_packed']} (packed) -> {args.out}")
+          f"req/s {rep.get('requests_per_sec')} | "
+          f"lat {rep.get('rollout_latency_ms_per_request')}ms/req | "
+          f"iter {rep.get('iteration_time_s')}s | ttft {rep.get('ttft_ms')} | "
+          f"mem {rep.get('peak_mem_gb')}GB | "
+          f"pad {rep['padding_waste']}->{rep['padding_waste_packed']} -> {args.out}")
     for name, b in rep["breakdown"].items():
         print(f"    {name:14s} {b['seconds']:>8.2f}s  {b['pct']:>5.1f}%")
 

@@ -41,6 +41,22 @@ class PhaseTimer:
         return out
 
 
+def rollout_metrics(n_completions: int, rollout_seconds: float, steps: int,
+                    total_s: float, ttft_ms: float | None = None) -> dict:
+    """Rollout throughput/latency metrics for a HF-vs-vLLM comparison. All
+    derived from measured counts + times — nothing invented. TTFT is reported
+    only when the engine supplies it (vLLM); HF batch-generate leaves it None."""
+    return {
+        "n_completions": n_completions,
+        "requests_per_sec": round(n_completions / rollout_seconds, 2)
+        if rollout_seconds > 0 else None,
+        "rollout_latency_ms_per_request": round(rollout_seconds / n_completions * 1000, 1)
+        if n_completions else None,
+        "iteration_time_s": round(total_s / steps, 3) if steps else None,
+        "ttft_ms": ttft_ms,
+    }
+
+
 def padding_waste(attention_mask) -> float:
     """Fraction of batch positions that are padding (0 = perfectly packed).
     attention_mask: [B, T] tensor with 1 = real token, 0 = pad."""

@@ -36,6 +36,7 @@ class VLLMRolloutEngine(RolloutEngine):
         # one GPU during the benchmark (0.6B is tiny; ~half of 24GB is ample).
         self.llm = model or LLM(model=config.model.name, dtype=dtype,
                                 gpu_memory_utilization=0.5)
+        self.last_ttft_ms: float | None = None   # set per generate() for the bench
 
     def _format(self, prompt: str) -> str:
         if getattr(self.tokenizer, "chat_template", None):
@@ -56,6 +57,16 @@ class VLLMRolloutEngine(RolloutEngine):
                             max_tokens=rc.max_new_tokens, seed=seed)
         texts = [self._format(p) for p in prompts]
         outs = self.llm.generate(texts, sp)  # continuous-batched across all prompts
+
+        # TTFT: mean (first_token - arrival) across requests, when vLLM reports
+        # metrics. Best-effort — never fabricated; stays None if unavailable.
+        try:
+            ttfts = [o.metrics.first_token_time - o.metrics.arrival_time
+                     for o in outs if getattr(o, "metrics", None)
+                     and o.metrics.first_token_time and o.metrics.arrival_time]
+            self.last_ttft_ms = round(1000 * sum(ttfts) / len(ttfts), 1) if ttfts else None
+        except Exception:
+            self.last_ttft_ms = None
 
         groups: list[RolloutGroup] = []
         for prompt, o in zip(prompts, outs):
