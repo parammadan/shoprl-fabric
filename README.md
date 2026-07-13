@@ -1,92 +1,79 @@
 # ShopRL Fabric
 
-Fault-tolerant RL post-training platform for shopping LLMs. Work in progress — actively building.
+A from-scratch **RL post-training platform** for a shopping-recommendation LLM —
+the full lifecycle (config → rollout → reward → optimize → eval → checkpoint) with
+observability, alerting, and efficiency benchmarking. Built to develop on a laptop
+(Apple M1, tiny model) and scale to cloud GPU **unchanged** behind stable
+interfaces.
 
-A from-scratch reinforcement-learning **post-training infrastructure** for a shopping
-recommendation LLM: the full lifecycle — config → rollout → reward → GRPO update →
-eval → checkpoint — built to be developed and debugged on a laptop (Apple M1, tiny
-model) and scaled to cloud GPU in short bursts.
+Model: `Qwen/Qwen3-0.6B` (small on purpose). Stack: PyTorch, HF Transformers,
+PEFT (LoRA), vLLM (GPU rollout), spot GPU + HF Hub checkpoints.
 
-## Why this exists
+## Why it's interesting
+- **Verifiable, un-hackable reward** — scored against a synthetic catalog that *is*
+  ground truth (no reward model); budget/coverage check the catalog's real specs,
+  never the model's stated ones.
+- **Three RL algorithms behind one interface** — GRPO, RLOO, PPO share rollout /
+  reward / KL / clipped-loss, so comparisons isolate exactly the advantage/critic.
+- **Runs on 8 GB M1** — LoRA (adapter = policy; disabled = frozen reference, no 2nd
+  model), logsumexp log-probs (no full-vocab softmax), gradient checkpointing.
+- **Real ops discipline** — spot GPUs via SSM, delete-on-terminate EBS, verified
+  teardown every run, checkpoints to HF Hub, incident-response alerting.
 
-A portfolio project modeling production-style RL training infrastructure:
-verifiable rewards, a critic-free policy-gradient loop (GRPO), memory-frugal
-training (LoRA), and an engine interface that swaps HF `generate` (laptop) for
-vLLM (GPU) without touching the learner.
+## Key results (all measured — see the docs repo for full data)
+- **The loop learns**: nonzero gradients, KL controlled, coherent generation
+  (after fixing a rollout-in-train-mode bug that had silently zeroed learning).
+- **Rigor over hype**: a 30-step GRPO run showed 0.851→0.930 held-out at n=16, but
+  a proper **n=64** eval revised that to ~flat (0.841→0.839) — the task is
+  near-saturated for the base model. Reported honestly; the substantive result is
+  the comparison below.
+- **Algorithm KL-stability (30 steps, identical settings, n=64 held-out):** reward
+  gain ≈0 for all three, but stability differs sharply —
 
-## Task & reward (verifiable, no reward model)
+  | algo | held-out gain | final KL | max KL |
+  |---|---|---|---|
+  | RLOO | +0.002 | **0.015** | **0.22** |
+  | GRPO | −0.002 | 0.58 | 0.99 |
+  | PPO  | +0.001 | **6.78** | **6.78** |
 
-The policy recommends a laptop from a candidate shortlist given a customer's
-constraints (budget / RAM / weight / battery). Every reward is computed against a
-**synthetic catalog that is ground truth**, so scores are objective and un-hackable:
-
-| Component | Checks |
-|---|---|
-| `budget_compliance` | recommended SKU's *true* price ≤ max_price |
-| `catalog_groundedness` | claimed SKUs exist + stated specs match catalog (`is_hallucinated` flag) |
-| `attribute_coverage` | recommended SKU satisfies all constraints |
-| `response_quality` | (format, comparison) |
-
-Composite: `0.25·budget + 0.25·ground + 0.25·coverage + 0.15·format + 0.10·comparison − 0.50·hallucinated`.
+  **RLOO is the most stable** (leave-one-out baseline, no critic); **PPO's fresh
+  value-head critic destabilized** (KL blew up) with no reward benefit — the classic
+  case for critic-free methods when a sample group is available.
+- **Alerting validated on the real runs**: the KL-blow-up rule fires CRITICAL on
+  PPO (×13) and stays silent on RLOO; reward-stall fires on the flat runs.
+- **Efficiency (A10G, measured)**: **rollout = 82–84% of wall-clock**, optimize
+  ~17%, reward ~0%. Async rollout and reward-worker parallelism gave no gain on a
+  single GPU (measured negative result); the real lever is faster rollout (vLLM) —
+  which is why rollout is decoupled in the scale design.
 
 ## Architecture
-
-```
-config (YAML) ─▶ RolloutEngine (HF/MPS ⇄ vLLM/GPU) ─▶ reward (vs catalog)
-                          │                                    │
-                          └──────▶ GRPO: group advantages ─ KL(k3) ─ clipped loss
-                                            │
-                                   LoRA policy update ─▶ checkpoint (→ HF Hub)
-```
-
-- `shoprl.config` — one pydantic-validated YAML per experiment.
-- `shoprl.rollout` — `RolloutEngine` interface; `HFRolloutEngine` (M1) / vLLM (GPU).
-- `shoprl.data` — deterministic catalog + prompts with verifiable answer sets.
-- `shoprl.reward` — 4 pure reward functions + composite.
-- `shoprl.grpo` — advantages, k3 KL, clipped loss, LoRA training loop.
-- `shoprl.eval` — reward-distribution report + untrained baseline.
-- `shoprl.task` — retrieve→shortlist→prompt builder.
+`config → RolloutEngine (HF ⇄ vLLM) → reward (vs catalog) → RLTrainer
+(GRPO/RLOO/PPO) → eval → checkpoint`, with `metrics.jsonl → dashboard + alerting`.
+Full diagram + the distributed-fabric scale target: docs repo `ARCHITECTURE.md`.
 
 ## Setup
-
-Requires Python 3.12.
-
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"      # core + tests (model-free)
 pip install -e ".[hf]"       # + torch/transformers/peft for real runs
 ```
 
-## How to run
-
+## Run
 ```bash
-# 1. Generate the synthetic dataset (deterministic)
-python -m shoprl.data.build --out data --n-catalog 300 --n-prompts 200
+python -m shoprl.data.build --out data                          # synth dataset
+python -m shoprl.eval.baseline --config configs/grpo_qwen_06b.yaml   # untrained baseline
+python -m shoprl.train --config configs/grpo_qwen_06b.yaml       # GRPO training (one YAML)
+python -m shoprl.rl.run --config configs/compare_rloo.yaml --out results/rloo.json  # any algorithm
+python -m shoprl.observability.alerts --result results/rloo.json # incident alerts
+python -m shoprl.observability.dashboard --overlay results/*.json --out overlay.html # comparison view
+python -m shoprl.bench.harness --config configs/bench_hf.yaml --steps 16 --out b.json # profiling
 
-# 2. Inspect the reward distribution on real model output
-python -m shoprl.eval.reward_report --config configs/dev.yaml --n-prompts 4 --num-samples 8
-
-# 3. Baseline: score the UNTRAINED model on held-out prompts
-python -m shoprl.eval.baseline --config configs/grpo_qwen_06b.yaml --out outputs/baseline.json
-
-# 4. Launch the whole GRPO loop from one YAML
-python -m shoprl.train --config configs/grpo_qwen_06b.yaml
-
-# CPU smoke (proves the loop end-to-end on an 8GB M1)
-python -m shoprl.train --config configs/smoke_cpu.yaml
+pytest -q                                        # full suite (model-free, fast)
+docker build -t shoprl-fabric . && docker run --rm shoprl-fabric
 ```
 
-## Tests & Docker
-
-```bash
-pytest -q                    # full suite (model-free, fast)
-docker build -t shoprl-fabric . && docker run --rm shoprl-fabric   # tests in a clean env
-```
-
-## Roadmap
-
-Single-node lifecycle (config-driven GRPO loop end to end, verifiable reward
-layer, within-group-variance instrumentation, untrained baseline, Docker + tests)
-is in place. Next: the first real GRPO training run on a cloud spot GPU, then a
-multi-process "fabric" (queue + rollout workers + learner) with checkpoint/resume
-for spot-interruption fault tolerance.
+## Status
+Months 1–4 complete: single-node lifecycle, algorithm comparison, observability +
+alerting, efficiency benchmarking. Next: land a working vLLM build (rollout
+throughput) and the distributed fabric (rollout/reward workers + learner over a
+queue, with checkpoint/resume). Dev log + design docs live in a separate repo.
