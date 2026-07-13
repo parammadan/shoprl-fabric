@@ -176,31 +176,22 @@ def main() -> None:
                     help="platform stores dir (default runs/<name>/platform)")
     ap.add_argument("--gpu-mem-gb", type=float, default=None,
                     help="enforce the preflight memory estimate against this budget")
-    ap.add_argument("--no-platform", action="store_true",
-                    help="skip platform integration (pure comparison JSON only)")
     ap.add_argument("--skip-preflight", action="store_true")
     args = ap.parse_args()
 
     config = load_config(args.config)
 
-    if args.no_platform:
-        import shutil
-        out = run_experiment(config, args.n_prompts, args.num_samples)
-        result = out["result"]
-        dst = os.path.join(config.training.ckpt_dir, f"step-{config.training.steps}")
-        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-        shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(out["checkpoint_dir"], dst)       # legacy persistent checkpoint
-        shutil.rmtree(out["checkpoint_dir"], ignore_errors=True)
-    else:
-        root = args.platform_root or os.path.join("runs", config.experiment.name, "platform")
-        print(f"[run] algorithm={config.algorithm} steps={config.training.steps} "
-              f"-> platform root {root}")
-        ref = run_through_platform(config, args.n_prompts, args.num_samples, root,
-                                   gpu_mem_gb=args.gpu_mem_gb, skip_preflight=args.skip_preflight)
-        result = ref["result"]
-        print(f"[run] run {ref['run_id']} · checkpoint {ref['best_checkpoint']} · "
-              f"policy v{ref['policy_version']}")
+    # The ONLY execution path is through the platform. (For orchestration via
+    # the job queue + scheduler, submit through the control plane / API instead;
+    # this CLI is the direct single-run entry and uses the same platform path.)
+    root = args.platform_root or os.path.join("runs", config.experiment.name, "platform")
+    print(f"[run] algorithm={config.algorithm} steps={config.training.steps} "
+          f"-> platform root {root}")
+    ref = run_through_platform(config, args.n_prompts, args.num_samples, root,
+                               gpu_mem_gb=args.gpu_mem_gb, skip_preflight=args.skip_preflight)
+    result = ref["result"]
+    print(f"[run] run {ref['run_id']} · checkpoint {ref['best_checkpoint']} · "
+          f"policy v{ref['policy_version']}")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as f:

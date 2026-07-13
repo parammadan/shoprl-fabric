@@ -213,14 +213,33 @@ class JobStore:
         return self.transition(job_id, S.SUCCEEDED)
 
     def fail(self, job_id: str, error: str) -> Job:
-        """RUNNING -> FAILED, then apply the bounded-retry policy: requeue
-        (FAILED->RETRYING->PENDING) while attempts remain, else dead-letter
-        (FAILED->DEAD_LETTER). Returns the job in its resulting state."""
-        j = self.transition(job_id, S.FAILED, error=error, bump_attempt=True)
-        if j.attempts >= j.max_attempts:
-            return self.transition(job_id, S.DEAD_LETTER, error=error)
-        self.transition(job_id, S.RETRYING)
-        return self.transition(job_id, S.PENDING)
+        """Apply the bounded-retry policy in ONE atomic write (crash-safe): the
+        logical path is RUNNING -> FAILED -> (RETRYING -> PENDING | DEAD_LETTER),
+        but only the FINAL state is persisted, in a single guarded UPDATE. This
+        removes the intermediate commits that could strand a job in FAILED /
+        RETRYING if the process crashed mid-recovery. The full path is still
+        validated against the transition graph, so the graph remains the source
+        of truth for what is legal."""
+        job = self.get(job_id)
+        attempts = job.attempts + 1
+        final = S.DEAD_LETTER if attempts >= job.max_attempts else S.PENDING
+        # validate the collapsed path stays legal edge-by-edge
+        assert_transition(job.state, S.FAILED)
+        if final is S.PENDING:
+            assert_transition(S.FAILED, S.RETRYING)
+            assert_transition(S.RETRYING, S.PENDING)
+        else:
+            assert_transition(S.FAILED, S.DEAD_LETTER)
+        now = time.time()
+        cur = self.conn.execute(
+            "UPDATE jobs SET state=?, attempts=?, error=?, updated_at=?, "
+            "lease_expires_at=NULL WHERE id=? AND state=?",
+            (final.value, attempts, error, now, job_id, job.state.value))
+        self.conn.commit()
+        if cur.rowcount == 0:
+            raise ConcurrentModification(
+                f"{job_id} was not in {job.state.value} at fail time")
+        return self.get(job_id)
 
     def reap_expired(self, now: float | None = None) -> list[Job]:
         """Worker-kill recovery: find RUNNING jobs whose lease has expired (the

@@ -27,7 +27,6 @@ measurement are all real. Real multi-node weight broadcast is out of scope.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import time
 import uuid
@@ -35,10 +34,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from shoprl.platform.checkpoints import _fsync_dir, _sha256
+from shoprl.platform._atomic import (STAGING as _STAGING, atomic_ingest,
+                                     sha256_file as _sha256)
 
 MANIFEST = "manifest.json"
-_STAGING = ".staging"
 
 
 class PolicyCorrupt(Exception):
@@ -69,39 +68,20 @@ class PolicyRegistry:
         return 1 if latest is None else latest.version + 1
 
     def publish(self, source_dir: str | Path, metadata: dict | None = None) -> PolicyVersion:
-        """Atomically register the next policy version from a directory of
-        adapter files."""
-        source_dir = Path(source_dir)
+        """Atomically register the next policy version (via the shared
+        atomic_ingest primitive). Fail-closed on a version collision (a
+        concurrent publisher raises rather than clobbering v{n})."""
         version = self._next_version()
-        staging = self.root / _STAGING / f"v{version}-{uuid.uuid4().hex[:8]}"
-        if staging.exists():
-            shutil.rmtree(staging)
-        staging.mkdir(parents=True)
-        entries = []
-        for src in sorted(source_dir.rglob("*")):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(source_dir).as_posix()
-            dst = staging / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
-            digest, size = _sha256(dst)
-            entries.append({"path": rel, "sha256": digest, "size": size})
-            with open(dst, "rb") as f:
-                os.fsync(f.fileno())
-        fingerprint = _fingerprint(entries)
-        pv = PolicyVersion(version=version, fingerprint=fingerprint,
-                           metadata=metadata or {}, files=entries)
-        with open(staging / MANIFEST, "w") as f:
-            f.write(pv.model_dump_json(exclude={"path"}, indent=2))
-            f.flush()
-            os.fsync(f.fileno())
-        _fsync_dir(staging)
-        final = self.root / f"v{version}"
-        os.replace(staging, final)                    # atomic commit
-        _fsync_dir(self.root)
-        pv.path = str(final)
-        return pv
+
+        def _manifest(entries: list[dict]) -> str:
+            return PolicyVersion(version=version, fingerprint=_fingerprint(entries),
+                                 metadata=metadata or {}, files=entries
+                                 ).model_dump_json(exclude={"path"}, indent=2)
+
+        entries, final = atomic_ingest(self.root, Path(source_dir), f"v{version}",
+                                       manifest_name=MANIFEST, manifest_bytes=_manifest)
+        return PolicyVersion(version=version, fingerprint=_fingerprint(entries),
+                             metadata=metadata or {}, files=entries, path=str(final))
 
     def publish_state(self, state: dict, metadata: dict | None = None) -> PolicyVersion:
         tmp = self.root / _STAGING / f"_state-{uuid.uuid4().hex[:8]}"

@@ -24,12 +24,50 @@ cost). `runner` is injectable so the control path is testable without a model.
 from __future__ import annotations
 
 import os
+import threading
 
-from shoprl.platform.jobs import Job
+from shoprl.platform.jobs import InvalidTransition, Job
 from shoprl.platform.scheduler import GPU, Scheduler
 from shoprl.platform.store import JobStore
 
 TRAIN_KIND = "train"
+# A training job is long (minutes+) and singular (gpu_slots=1). We hold a
+# generous lease and keep it alive with a heartbeat, so a HEALTHY long job is
+# never reaped, while a DEAD worker stops heartbeating and its lease expires
+# within ~LEASE seconds -> the reaper reclaims it. lease + heartbeat + reaper is
+# the complete loop; all three are now wired into serve_pending.
+TRAIN_LEASE_SECONDS = 120.0
+
+
+class _Heartbeat:
+    """Renews a job's lease from a BACKGROUND thread (its own DB connection —
+    sqlite connections aren't shareable across threads) while the job runs. If
+    the worker process dies, the thread dies with it, the lease expires, and the
+    reaper reclaims the job."""
+
+    def __init__(self, db_path: str, job_id: str, lease_seconds: float = TRAIN_LEASE_SECONDS):
+        self.db_path, self.job_id, self.lease = db_path, job_id, lease_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        store = JobStore(self.db_path)
+        try:
+            while not self._stop.wait(self.lease / 3.0):
+                try:
+                    store.renew_lease(self.job_id, lease_seconds=self.lease)
+                except Exception:
+                    return                    # job left RUNNING (done/cancelled) -> stop
+        finally:
+            store.close()
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join(timeout=2.0)
 
 
 def submit_training(store: JobStore, config_path: str, *, n_prompts: int = 64,
@@ -60,24 +98,40 @@ def execute_training_job(job: Job, *, runner=None) -> dict:
 
 
 def serve_pending(scheduler: Scheduler, *, runner=None, now: float | None = None) -> list[dict]:
-    """The worker loop (one pass): admit queued jobs via the scheduler, execute
-    each training job, and complete/fail it — releasing its slot. Returns a
-    summary per admitted job. Non-train jobs admitted here are failed with a
-    clear reason rather than left stranded RUNNING."""
-    results = []
+    """The worker loop (one pass):
+      1. REAP dead-worker jobs (expired leases) -> requeued for another worker.
+      2. Admit queued jobs via the scheduler (gpu-slot accounting).
+      3. Execute each training job under a lease HEARTBEAT, then complete/fail
+         it (releasing its slot).
+    Returns a summary per admitted job. Non-train jobs admitted here are failed
+    with a clear reason rather than stranded RUNNING."""
+    db_path = scheduler.store.db_path
+    reaped = scheduler.store.reap_expired(now=now)        # worker-death recovery, wired
+    results = [{"job_id": j.id, "status": "reaped", "state": j.state.value}
+               for j in reaped]
+
     for job in scheduler.schedule(now=now):
         if job.kind != TRAIN_KIND:
             scheduler.fail(job.id, f"no control-plane handler for kind={job.kind!r}")
-            results.append({"job_id": job.id, "status": "failed",
-                            "error": "unhandled kind"})
+            results.append({"job_id": job.id, "status": "failed", "error": "unhandled kind"})
+            continue
+        scheduler.store.renew_lease(job.id, lease_seconds=TRAIN_LEASE_SECONDS)  # size lease to the job
+        try:
+            with _Heartbeat(db_path, job.id):             # keep a healthy long job alive
+                ref = execute_training_job(job, runner=runner)
+        except Exception as e:                            # training/preflight failure
+            try:
+                scheduler.fail(job.id, repr(e))
+            except InvalidTransition:
+                pass                                      # already cancelled/reaped: benign
+            results.append({"job_id": job.id, "status": "failed", "error": repr(e)})
             continue
         try:
-            ref = execute_training_job(job, runner=runner)
             scheduler.complete(job.id)
             results.append({"job_id": job.id, "status": "succeeded", **ref})
-        except Exception as e:                        # training/preflight failure
-            scheduler.fail(job.id, repr(e))
-            results.append({"job_id": job.id, "status": "failed", "error": repr(e)})
+        except InvalidTransition:                         # cancelled mid-run: benign
+            results.append({"job_id": job.id, "status": "cancelled",
+                            "note": "cancelled during execution", **ref})
     return results
 
 

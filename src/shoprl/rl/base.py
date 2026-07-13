@@ -176,8 +176,11 @@ class RLTrainer(ABC):
             print(f"[{self.name}] step {step:>2} | reward {m['reward_mean']:+.3f}"
                   f"±{m['reward_std']:.3f} | kl {m['kl']:.4f} | entropy {m['entropy']:.3f}"
                   f" | grad_norm {m['grad_norm']:.3f}")
-            if (step + 1) % self.tr.save_every == 0 and (step + 1) < self.tr.steps:
-                self.save_checkpoint(step + 1)
+            # NOTE: no mid-training save here — the CheckpointRegistry is the sole
+            # authoritative checkpoint writer (final checkpoint is registered by
+            # run_through_platform after train()). Periodic spot-interruption
+            # resume points are a documented scale-out concern, not a second
+            # writer that bypasses the registry.
         elapsed = time.time() - t0
         self.train_time_s = elapsed
         self.tokens_per_sec = n_tokens / elapsed if elapsed > 0 else 0.0

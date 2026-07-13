@@ -24,9 +24,7 @@ within one filesystem (true here). Corruption in tests is injected deliberately
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shutil
 import time
 import uuid
@@ -34,8 +32,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from shoprl.platform._atomic import (STAGING as _STAGING, atomic_ingest,
+                                     fsync_dir as _fsync_dir, sha256_file as _sha256)
+
 MANIFEST_NAME = "manifest.json"
-_STAGING = ".staging"
 
 
 class CheckpointNotFound(KeyError):
@@ -63,29 +63,6 @@ class Manifest(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
-def _sha256(path: Path) -> tuple[str, int]:
-    h = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 16), b""):
-            h.update(chunk)
-            size += len(chunk)
-    return h.hexdigest(), size
-
-
-def _fsync_dir(path: Path) -> None:
-    # Best effort: make the rename/durability ordering real. Not all platforms
-    # allow fsync on a directory fd; ignore failures honestly.
-    try:
-        fd = os.open(str(path), os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
-
-
 class CheckpointRegistry:
     def __init__(self, root: str | Path):
         self.root = Path(root)
@@ -94,40 +71,19 @@ class CheckpointRegistry:
     # --- write -----------------------------------------------------------
     def save(self, source_dir: str | Path, *, step: int,
              policy_id: str | None = None, metadata: dict | None = None) -> Manifest:
-        """Atomically register the contents of `source_dir` as a checkpoint."""
-        source_dir = Path(source_dir)
+        """Atomically register the contents of `source_dir` as a checkpoint
+        (via the shared atomic_ingest primitive)."""
         ckpt_id = f"step-{step:06d}-{uuid.uuid4().hex[:8]}"
-        staging = self.root / _STAGING / ckpt_id
-        if staging.exists():
-            shutil.rmtree(staging)
-        staging.mkdir(parents=True)
 
-        # copy every file, hashing as we go
-        entries: list[FileEntry] = []
-        for src in sorted(source_dir.rglob("*")):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(source_dir).as_posix()
-            dst = staging / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
-            digest, size = _sha256(dst)
-            entries.append(FileEntry(path=rel, sha256=digest, size=size))
-            with open(dst, "rb") as f:                 # durability before commit
-                os.fsync(f.fileno())
+        def _manifest(entries: list[dict]) -> str:
+            return Manifest(ckpt_id=ckpt_id, step=step, policy_id=policy_id,
+                            files=[FileEntry(**e) for e in entries],
+                            metadata=metadata or {}).model_dump_json(indent=2)
 
-        manifest = Manifest(ckpt_id=ckpt_id, step=step, policy_id=policy_id,
-                            files=entries, metadata=metadata or {})
-        with open(staging / MANIFEST_NAME, "w") as f:
-            f.write(manifest.model_dump_json(indent=2))
-            f.flush()
-            os.fsync(f.fileno())
-        _fsync_dir(staging)
-
-        final = self.root / ckpt_id
-        os.replace(staging, final)                     # <-- atomic commit point
-        _fsync_dir(self.root)
-        return manifest
+        entries, _ = atomic_ingest(self.root, Path(source_dir), ckpt_id,
+                                   manifest_name=MANIFEST_NAME, manifest_bytes=_manifest)
+        return Manifest(ckpt_id=ckpt_id, step=step, policy_id=policy_id,
+                        files=[FileEntry(**e) for e in entries], metadata=metadata or {})
 
     def save_state(self, state: dict, *, step: int, policy_id: str | None = None,
                    metadata: dict | None = None) -> Manifest:
