@@ -29,11 +29,15 @@ import json
 import os
 from pathlib import Path
 
+from typing import Literal
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from shoprl.platform import dash_data
 from shoprl.platform.jobs import InvalidTransition, Job, JobState
+from shoprl.platform.registry import (ExperimentRegistry, RunNotFound,
+                                      RunRecord, RunStatus)
 from shoprl.platform.store import ConcurrentModification, JobNotFound, JobStore
 from shoprl.platform.traj_store import TrajectoryNotFound
 
@@ -70,14 +74,35 @@ class RunMetricsOut(BaseModel):
     metrics: list[dict]
 
 
+class RunCreate(BaseModel):
+    algorithm: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    config_hash: str = Field(min_length=1)
+    dataset_version: str = Field(min_length=1)
+    reward_version: str = Field(min_length=1)
+    git_commit: str | None = None
+    cost_estimate: dict | None = None
+
+
+class RunFinish(BaseModel):
+    status: Literal["succeeded", "failed", "cancelled"]
+    eval_result: dict | None = None
+    best_checkpoint: str | None = None
+    cost_estimate: dict | None = None
+
+
 def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
     root = Path(root)
     runs_dir = Path(runs_dir)
     jobs_db = str(root / "jobs.db")
+    registry_db = str(root / "registry.db")
     app = FastAPI(title="ShopRL Fabric Platform API", version="1.0")
 
     def _job_store() -> JobStore:
         return JobStore(jobs_db)
+
+    def _registry() -> ExperimentRegistry:
+        return ExperimentRegistry(registry_db)
 
     # --- jobs -------------------------------------------------------------
     @app.post("/jobs", response_model=JobOut, status_code=201)
@@ -129,7 +154,76 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
     def cancel_job(job_id: str) -> JobOut:
         return _transition(job_id, JobState.CANCELLED, None, "cancel")
 
-    # --- runs -------------------------------------------------------------
+    # --- experiment registry (runs) --------------------------------------
+    @app.post("/runs", response_model=RunRecord, status_code=201)
+    def create_run(body: RunCreate) -> RunRecord:
+        reg = _registry()
+        try:
+            rec = RunRecord(algorithm=body.algorithm, model=body.model,
+                            config_hash=body.config_hash,
+                            dataset_version=body.dataset_version,
+                            reward_version=body.reward_version,
+                            git_commit=body.git_commit,
+                            cost_estimate=body.cost_estimate)
+            return reg.save(rec)
+        finally:
+            reg.close()
+
+    @app.get("/runs", response_model=list[RunRecord])
+    def list_runs(algorithm: str | None = None, status: RunStatus | None = None):
+        reg = _registry()
+        try:
+            return reg.list(algorithm=algorithm, status=status)
+        finally:
+            reg.close()
+
+    @app.get("/runs/compare")
+    def compare_runs(ids: str) -> dict:
+        run_ids = [i for i in ids.split(",") if i]
+        if not run_ids:
+            raise HTTPException(400, "provide ?ids=a,b,c")
+        reg = _registry()
+        try:
+            return reg.compare(run_ids)
+        except RunNotFound as e:
+            raise HTTPException(404, f"run {e.args[0]} not found")
+        finally:
+            reg.close()
+
+    @app.get("/runs/{run_id}", response_model=RunRecord)
+    def get_run(run_id: str) -> RunRecord:
+        reg = _registry()
+        try:
+            return reg.get(run_id)
+        except RunNotFound:
+            raise HTTPException(404, f"run {run_id} not found")
+        finally:
+            reg.close()
+
+    @app.post("/runs/{run_id}/start", response_model=RunRecord)
+    def start_run(run_id: str) -> RunRecord:
+        reg = _registry()
+        try:
+            return reg.start(run_id)
+        except RunNotFound:
+            raise HTTPException(404, f"run {run_id} not found")
+        finally:
+            reg.close()
+
+    @app.post("/runs/{run_id}/finish", response_model=RunRecord)
+    def finish_run(run_id: str, body: RunFinish) -> RunRecord:
+        reg = _registry()
+        try:
+            return reg.finish(run_id, RunStatus(body.status),
+                              eval_result=body.eval_result,
+                              best_checkpoint=body.best_checkpoint,
+                              cost_estimate=body.cost_estimate)
+        except RunNotFound:
+            raise HTTPException(404, f"run {run_id} not found")
+        finally:
+            reg.close()
+
+    # --- runs: training-metrics file -------------------------------------
     @app.get("/runs/{run_id}/metrics", response_model=RunMetricsOut)
     def run_metrics(run_id: str) -> RunMetricsOut:
         # run_id maps to runs/<run_id>/metrics.jsonl (the RL trainer's output).
