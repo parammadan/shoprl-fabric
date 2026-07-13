@@ -1,0 +1,40 @@
+# Watchable REAL training on ONE small GPU (T4 16GB or A10G 24GB).
+# Runs genuine Qwen3-0.6B generation -> rule reward -> GRPO optimizer step, with
+# real per-step KL / reward / entropy written to runs/shoprl-demo/metrics.jsonl,
+# and a real atomic checkpoint + policy at the end — all through the platform.
+# ~20 short steps so the curves grow while you watch (and you can trigger a
+# recovery scenario mid-run). Qwen3-0.6B is tiny — ONE GPU, never sharded.
+experiment:
+  name: shoprl-demo
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  # float16 works on BOTH T4 (no bf16) and A10G. On an A10G you may switch to
+  # bfloat16 for a touch more speed/stability; leave float16 for portability.
+  dtype: float16
+  device: auto          # -> cuda on the GPU box
+
+algorithm: grpo         # swap to rloo / ppo to watch the KL-stability difference
+
+rollout:
+  engine: hf            # REAL generation (not the stub). vllm is the GPU speed
+                        # drop-in but not required for the demo.
+  max_new_tokens: 48
+  temperature: 1.0
+  top_p: 0.95
+  num_samples: 8        # GRPO group size (>=2 required)
+
+training:
+  steps: 20             # watchable; each step is a few seconds on one GPU
+  prompts_per_step: 2   # effective batch = 2 * 8 = 16
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04            # KL penalty vs the frozen reference
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 6
+  ckpt_dir: checkpoints
+  save_every: 1000      # unused (registry is the sole checkpoint writer)
