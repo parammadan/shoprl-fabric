@@ -23,6 +23,8 @@ labeled as such — never a multi-node claim.
 """
 from shoprl.platform.jobs import (TERMINAL, InvalidTransition, Job, JobState,
                                    can_transition)
+from shoprl.platform.artifacts import (Artifact, ArtifactRegistry,
+                                       ArtifactType)
 from shoprl.platform.checkpoints import (CheckpointCorrupt, CheckpointRegistry,
                                          Manifest)
 from shoprl.platform.failures import (BatchPlan, FailureClass, RecoveryAction,
@@ -45,4 +47,5 @@ __all__ = ["JobState", "Job", "can_transition", "TERMINAL",
            "RecoveryEvent", "BatchPlan", "SimulatedOOM", "classify",
            "Scheduler", "ResourceConfig", "PolicyRegistry", "PolicyVersion",
            "PolicyClient", "staleness", "staleness_report",
-           "PromptRegistry", "PromptDatasetMeta"]
+           "PromptRegistry", "PromptDatasetMeta",
+           "ArtifactRegistry", "Artifact", "ArtifactType"]

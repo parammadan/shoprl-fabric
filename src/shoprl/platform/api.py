@@ -35,6 +35,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from shoprl.platform import dash_data
+from shoprl.platform.artifacts import (Artifact, ArtifactNotFound,
+                                       ArtifactRegistry, ArtifactType)
 from shoprl.platform.jobs import InvalidTransition, Job, JobState
 from shoprl.platform.policy import (PolicyNotFound, PolicyRegistry,
                                     PolicyVersion, staleness_report)
@@ -94,6 +96,16 @@ class RunFinish(BaseModel):
     cost_estimate: dict | None = None
 
 
+class ArtifactCreate(BaseModel):
+    type: ArtifactType
+    ref: str = Field(min_length=1)
+    run_id: str | None = None
+    parents: list[str] = Field(default_factory=list)
+    uri: str | None = None
+    hash: str | None = None
+    metadata: dict = Field(default_factory=dict)
+
+
 def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
     root = Path(root)
     runs_dir = Path(runs_dir)
@@ -109,6 +121,9 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
 
     def _policies() -> PolicyRegistry:
         return PolicyRegistry(root / "policies")
+
+    def _artifacts() -> ArtifactRegistry:
+        return ArtifactRegistry(str(root / "artifacts.db"))
 
     # --- jobs -------------------------------------------------------------
     @app.post("/jobs", response_model=JobOut, status_code=201)
@@ -272,6 +287,45 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
             return _policies().get(version)
         except PolicyNotFound:
             raise HTTPException(404, f"policy v{version} not found")
+
+    # --- artifact registry -----------------------------------------------
+    @app.post("/artifacts", response_model=Artifact, status_code=201)
+    def create_artifact(body: ArtifactCreate) -> Artifact:
+        reg = _artifacts()
+        try:
+            return reg.register(body.type, body.ref, run_id=body.run_id,
+                                parents=body.parents, uri=body.uri, hash=body.hash,
+                                metadata=body.metadata)
+        finally:
+            reg.close()
+
+    @app.get("/artifacts", response_model=list[Artifact])
+    def list_artifacts(type: ArtifactType | None = None, run_id: str | None = None):
+        reg = _artifacts()
+        try:
+            return reg.list(type=type, run_id=run_id)
+        finally:
+            reg.close()
+
+    @app.get("/artifacts/{artifact_id}", response_model=Artifact)
+    def get_artifact(artifact_id: str) -> Artifact:
+        reg = _artifacts()
+        try:
+            return reg.get(artifact_id)
+        except ArtifactNotFound:
+            raise HTTPException(404, f"artifact {artifact_id} not found")
+        finally:
+            reg.close()
+
+    @app.get("/artifacts/{artifact_id}/lineage")
+    def artifact_lineage(artifact_id: str) -> dict:
+        reg = _artifacts()
+        try:
+            return reg.lineage(artifact_id)
+        except ArtifactNotFound:
+            raise HTTPException(404, f"artifact {artifact_id} not found")
+        finally:
+            reg.close()
 
     # --- trajectories -----------------------------------------------------
     @app.get("/trajectories/{traj_id}")
