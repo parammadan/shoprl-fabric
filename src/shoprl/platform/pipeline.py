@@ -83,21 +83,33 @@ def rollout_handler(job) -> dict:
     engine = StubRolloutEngine(seed=p["seed"])
     group = engine.generate([p["prompt"]], num_samples=p["num_samples"],
                             seed=p["seed"] + p["step"])[0]
+    # Score the whole group first so we can compute a REAL group-relative
+    # advantage (the GRPO signal) per completion — not a fabricated number.
+    breakdowns = [compute_reward(c.text, ctx) for c in group.completions]
+    rewards = [b.total for b in breakdowns]
+    gmean = statistics.fmean(rewards)
+    gstd = statistics.pstdev(rewards) if len(rewards) > 1 else 0.0
     ts = TrajectoryStore(p["traj_db"])
-    rewards = []
     try:
-        for comp in group.completions:
-            r = compute_reward(comp.text, ctx).total
-            rewards.append(r)
-            ts.put(Trajectory.from_completion(
+        for comp, bd, r in zip(group.completions, breakdowns, rewards):
+            adv = (r - gmean) / (gstd + 1e-8)     # GRPO group-relative advantage
+            traj = Trajectory.from_completion(
                 comp, reward=r,
                 lineage=Lineage(policy_id=p["policy_id"], job_id=job.id,
                                 prompt_id=p["prompt_id"], seed=p["seed"]),
-                prompt_id=p["prompt_id"]))
+                prompt_id=p["prompt_id"])
+            traj = traj.model_copy(update={"meta": {
+                "reward_components": bd.as_dict(), "advantage": adv,
+                "group_mean": gmean, "group_std": gstd,
+                "group_size": len(rewards),
+                # KL is a per-step training metric, not a per-trajectory value;
+                # left absent here on purpose (the UI shows it as N/A).
+            }})
+            ts.put(traj)
     finally:
         ts.close()
     return {"prompt_id": p["prompt_id"],
-            "reward_mean": statistics.fmean(rewards), "n": len(rewards)}
+            "reward_mean": gmean, "n": len(rewards)}
 
 
 class Pipeline:

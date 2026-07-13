@@ -121,6 +121,13 @@ class TrajectoryStore:
         mean = sum(vals) / n
         return {"count": n, "min": min(vals), "mean": mean, "max": max(vals)}
 
+    def recent(self, limit: int = 500) -> list[Trajectory]:
+        """Most-recent trajectories first (for the explorer's picker)."""
+        rows = self.conn.execute(
+            "SELECT data FROM trajectories ORDER BY created_at DESC LIMIT ?",
+            (limit,)).fetchall()
+        return [Trajectory.model_validate_json(r["data"]) for r in rows]
+
     def reward_by_policy(self) -> list[tuple[str, float, int]]:
         """(policy_id, mean_reward, n) per policy version, oldest first."""
         rows = self.conn.execute(
