@@ -110,6 +110,19 @@ class TrajectoryStore:
         return self.conn.execute(
             "SELECT COUNT(*) c FROM trajectories").fetchone()["c"]
 
+    def prune(self, keep_last_n: int) -> int:
+        """Retention: keep the most recent `keep_last_n` trajectories, delete the
+        rest. Trajectories accumulate fast (num_samples per prompt per step);
+        without this the store grows unbounded. Returns rows deleted."""
+        if keep_last_n < 0:
+            raise ValueError("keep_last_n must be >= 0")
+        cur = self.conn.execute(
+            "DELETE FROM trajectories WHERE id NOT IN "
+            "(SELECT id FROM trajectories ORDER BY created_at DESC LIMIT ?)",
+            (keep_last_n,))
+        self.conn.commit()
+        return cur.rowcount
+
     def reward_stats(self) -> dict:
         """Aggregate reward distribution over all persisted trajectories (for
         the dashboard). Reads the indexed reward column directly."""

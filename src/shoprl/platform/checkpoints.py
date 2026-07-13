@@ -198,3 +198,21 @@ class CheckpointRegistry:
             shutil.rmtree(child, ignore_errors=True)
             n += 1
         return n
+
+    def prune(self, keep_last_n: int, protect: list[str] | None = None) -> list[str]:
+        """Retention: keep the most recent `keep_last_n` checkpoints, delete the
+        rest — except any id in `protect` (e.g. a run's best_checkpoint), which
+        is never removed. Checkpoints are large; without this the dir grows
+        unbounded. Returns the removed ckpt_ids."""
+        if keep_last_n < 1:
+            raise ValueError("keep_last_n must be >= 1")
+        protect = set(protect or [])
+        items = self.list()                          # oldest-first (by created_at)
+        keep_recent = {m.ckpt_id for m in items[-keep_last_n:]}
+        removed = []
+        for m in items:
+            if m.ckpt_id in keep_recent or m.ckpt_id in protect:
+                continue
+            shutil.rmtree(self.root / m.ckpt_id, ignore_errors=True)
+            removed.append(m.ckpt_id)
+        return removed
