@@ -1,5 +1,6 @@
-"""Tests for the live Streamlit dashboard: data access, DEV fault injection,
-and an in-process headless render of the real app (no fabrication)."""
+"""Tests for dash_data: read-only persisted-state access (the snapshot used by
+the API + ops console), integrity re-check, and DEV fault injection. No
+fabrication — absent metrics stay absent."""
 import json
 
 import pytest
@@ -80,12 +81,15 @@ def test_sim_duplicate_trajectory_links_lineage(fresh):
     assert child["parent_id"] == r["parent_id"]         # provenance preserved
 
 
-# --- the real app renders headless without error ---------------------------
-def test_streamlit_app_renders_without_exception(root):
-    pytest.importorskip("streamlit")
-    from streamlit.testing.v1 import AppTest
-    at = AppTest.from_file("src/shoprl/platform/streamlit_app.py", default_timeout=60)
-    at.run()
-    at.text_input[0].set_value(str(root)).run()         # point at the test run
-    assert not at.exception
-    assert any("ShopRL Fabric" in t.value for t in at.title)
+# --- live integrity re-check in the snapshot -------------------------------
+def test_snapshot_flags_corrupt_checkpoint(fresh):
+    ck = dash_data.snapshot(fresh)["checkpoints"][0]["ckpt_id"]
+    victim = next((fresh / "checkpoints" / ck).glob("state.json"))
+    victim.write_text(victim.read_text() + " ")         # mutate contents
+    statuses = {c["ckpt_id"]: c["integrity"]
+                for c in dash_data.snapshot(fresh)["checkpoints"]}
+    assert statuses[ck] == "CORRUPT"                    # re-hashed on load
+
+
+def test_snapshot_absent_training_metrics_stay_absent(root):
+    assert dash_data.snapshot(root)["training_metrics"] == []   # not fabricated

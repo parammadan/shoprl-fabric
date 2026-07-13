@@ -14,10 +14,10 @@ duplicate = deriving a child trajectory. Never wire these into a production path
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from shoprl.platform import dashboard
-from shoprl.platform.checkpoints import CheckpointRegistry
+from shoprl.platform.checkpoints import CheckpointCorrupt, CheckpointRegistry
 from shoprl.platform.failures import RecoveryController, SimulatedOOM
 from shoprl.platform.store import JobStore
 from shoprl.platform.traj_store import TrajectoryStore
@@ -34,11 +34,45 @@ def paths(root: str | Path) -> dict:
     }
 
 
+def _read_jsonl(path: str | Path) -> list[dict]:
+    p = Path(path)
+    return [json.loads(l) for l in p.open() if l.strip()] if p.exists() else []
+
+
 # --- reads -----------------------------------------------------------------
 def snapshot(root: str | Path, training_metrics: str | None = None) -> dict:
-    """Job states, reward-per-policy, checkpoints (+ live integrity), recovery
-    events, pipeline metrics, and optional real RL training metrics."""
-    return dashboard.collect(root, training_metrics)
+    """The operational snapshot, read from persisted state only: job states,
+    reward-per-policy, checkpoints (with a LIVE sha256 integrity re-check),
+    recovery events, pipeline metrics, and optional real RL training metrics.
+    Never imports trainer internals; absent metrics stay absent."""
+    root = Path(root)
+    store = JobStore(str(root / "jobs.db"))
+    traj = TrajectoryStore(str(root / "trajectories.db"))
+    registry = CheckpointRegistry(str(root / "checkpoints"))
+    try:
+        checkpoints = []
+        for m in registry.list():
+            try:
+                registry.verify(m.ckpt_id)
+                integrity = "OK"
+            except CheckpointCorrupt:
+                integrity = "CORRUPT"
+            checkpoints.append({
+                "ckpt_id": m.ckpt_id, "step": m.step,
+                "reward_mean": m.metadata.get("reward_mean"),
+                "n_files": len(m.files), "integrity": integrity})
+        return {
+            "job_counts": store.counts(),
+            "reward_stats": traj.reward_stats(),
+            "reward_by_policy": traj.reward_by_policy(),
+            "checkpoints": checkpoints,
+            "recovery_events": _read_jsonl(root / "recovery_events.jsonl"),
+            "pipeline_metrics": _read_jsonl(root / "pipeline_metrics.jsonl"),
+            "training_metrics": _read_jsonl(training_metrics) if training_metrics else [],
+        }
+    finally:
+        store.close()
+        traj.close()
 
 
 def comparisons(results_dir: str | Path) -> list[dict]:
