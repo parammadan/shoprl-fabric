@@ -28,6 +28,7 @@ from shoprl.platform.checkpoints import (CheckpointCorrupt, CheckpointRegistry,
 from shoprl.platform.failures import (BatchPlan, FailureClass, RecoveryAction,
                                       RecoveryController, RecoveryEvent,
                                       SimulatedOOM, classify)
+from shoprl.platform.scheduler import ResourceConfig, Scheduler
 from shoprl.platform.store import JobStore
 from shoprl.platform.traj_store import TrajectoryStore
 from shoprl.platform.trajectory import Lineage, Trajectory, TrajectoryStep
@@ -38,4 +39,5 @@ __all__ = ["JobState", "Job", "can_transition", "TERMINAL",
            "Trajectory", "TrajectoryStep", "Lineage", "TrajectoryStore",
            "CheckpointRegistry", "CheckpointCorrupt", "Manifest",
            "FailureClass", "RecoveryAction", "RecoveryController",
-           "RecoveryEvent", "BatchPlan", "SimulatedOOM", "classify"]
+           "RecoveryEvent", "BatchPlan", "SimulatedOOM", "classify",
+           "Scheduler", "ResourceConfig"]

@@ -262,4 +262,17 @@ def main() -> None:
         trajectory_panel(root)
 
 
-main()
+# Only run the app when executed under a real Streamlit script context (via
+# `streamlit run` or AppTest). This keeps the module import-safe: a plain import
+# — e.g. inside a spawned worker process, whose `spawn` bootstrap re-imports
+# modules — must NOT launch the app (that would hijack the process).
+def _has_streamlit_context() -> bool:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+if _has_streamlit_context():
+    main()

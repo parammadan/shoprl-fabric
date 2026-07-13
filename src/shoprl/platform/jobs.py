@@ -75,6 +75,10 @@ class Job:
     attempts: int = 0
     max_attempts: int = 3
     error: str | None = None
+    # Scheduler (admission control): which resource class this job needs and its
+    # priority (higher = admitted first). Default: a cpu job at priority 0.
+    resource: str = "cpu"
+    priority: int = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     # Pillar 2: a worker holds a time-bounded LEASE while RUNNING. If the worker

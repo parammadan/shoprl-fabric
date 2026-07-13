@@ -32,11 +32,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts         INTEGER NOT NULL,
     max_attempts     INTEGER NOT NULL,
     error            TEXT,
+    resource         TEXT NOT NULL DEFAULT 'cpu',
+    priority         INTEGER NOT NULL DEFAULT 0,
     created_at       REAL NOT NULL,
     updated_at       REAL NOT NULL,
     lease_expires_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
+CREATE INDEX IF NOT EXISTS idx_jobs_sched ON jobs(resource, state, priority);
 
 -- Pillar 2 idempotency ledger: one row per job that has produced a result.
 -- INSERT OR IGNORE on the PRIMARY KEY makes recording a result idempotent, so
@@ -74,15 +77,17 @@ class JobStore:
         self.conn.close()
 
     # --- writes ----------------------------------------------------------
-    def create(self, kind: str, payload: dict | None = None, max_attempts: int = 3) -> Job:
-        job = Job(kind=kind, payload=payload or {}, max_attempts=max_attempts)
+    def create(self, kind: str, payload: dict | None = None, max_attempts: int = 3,
+               resource: str = "cpu", priority: int = 0) -> Job:
+        job = Job(kind=kind, payload=payload or {}, max_attempts=max_attempts,
+                  resource=resource, priority=priority)
         self.conn.execute(
             "INSERT INTO jobs (id, kind, state, payload, attempts, max_attempts, "
-            "error, created_at, updated_at, lease_expires_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "error, resource, priority, created_at, updated_at, lease_expires_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (job.id, job.kind, job.state.value, json.dumps(job.payload),
-             job.attempts, job.max_attempts, job.error, job.created_at,
-             job.updated_at, job.lease_expires_at),
+             job.attempts, job.max_attempts, job.error, job.resource, job.priority,
+             job.created_at, job.updated_at, job.lease_expires_at),
         )
         self.conn.commit()
         return job
@@ -152,6 +157,41 @@ class JobStore:
                 if cur.rowcount == 1:
                     return self.get(row["id"])
             # every candidate was contested; loop and re-query
+
+    def claim_priority(self, resource: str, lease_seconds: float = 30.0,
+                       now: float | None = None) -> Job | None:
+        """Atomically claim the highest-priority (ties: oldest) PENDING job of a
+        given resource class. The scheduler's admission primitive: it decides a
+        resource has a free slot, then this actually takes the job."""
+        now = time.time() if now is None else now
+        lease = now + lease_seconds
+        while True:
+            rows = self.conn.execute(
+                "SELECT id FROM jobs WHERE state='pending' AND resource=? "
+                "ORDER BY priority DESC, created_at ASC LIMIT 8", (resource,)
+            ).fetchall()
+            if not rows:
+                return None
+            for row in rows:
+                cur = self.conn.execute(
+                    "UPDATE jobs SET state='running', lease_expires_at=?, "
+                    "updated_at=? WHERE id=? AND state='pending'",
+                    (lease, now, row["id"]))
+                self.conn.commit()
+                if cur.rowcount == 1:
+                    return self.get(row["id"])
+
+    def running_counts_by_resource(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT resource, COUNT(*) c FROM jobs WHERE state='running' "
+            "GROUP BY resource").fetchall()
+        return {r["resource"]: r["c"] for r in rows}
+
+    def pending_counts_by_resource(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT resource, COUNT(*) c FROM jobs WHERE state='pending' "
+            "GROUP BY resource").fetchall()
+        return {r["resource"]: r["c"] for r in rows}
 
     def renew_lease(self, job_id: str, lease_seconds: float = 30.0,
                     now: float | None = None) -> Job:
@@ -245,6 +285,7 @@ class JobStore:
             id=row["id"], kind=row["kind"], state=JobState(row["state"]),
             payload=json.loads(row["payload"]), attempts=row["attempts"],
             max_attempts=row["max_attempts"], error=row["error"],
+            resource=row["resource"], priority=row["priority"],
             created_at=row["created_at"], updated_at=row["updated_at"],
             lease_expires_at=row["lease_expires_at"],
         )
