@@ -108,6 +108,17 @@ class JobStore:
                 f"{job_id} was not in {job.state.value} at update time")
         return self.get(job_id)
 
+    def update_payload(self, job_id: str, payload: dict) -> Job:
+        """Replace a job's payload. Used by Pillar 5's OOM recovery to hand the
+        retry a shrunk microbatch / raised grad-accum before requeueing."""
+        cur = self.conn.execute(
+            "UPDATE jobs SET payload=?, updated_at=? WHERE id=?",
+            (json.dumps(payload), time.time(), job_id))
+        self.conn.commit()
+        if cur.rowcount == 0:
+            raise JobNotFound(job_id)
+        return self.get(job_id)
+
     # --- Pillar 2: claim / lease / lifecycle helpers ---------------------
     def claim(self, kinds: list[str] | None = None,
               lease_seconds: float = 30.0, now: float | None = None) -> Job | None:
