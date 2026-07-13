@@ -30,6 +30,7 @@ from shoprl.platform.failures import (BatchPlan, FailureClass, RecoveryAction,
                                       SimulatedOOM, classify)
 from shoprl.platform.policy import (PolicyClient, PolicyRegistry,
                                     PolicyVersion, staleness, staleness_report)
+from shoprl.platform.prompt_registry import PromptDatasetMeta, PromptRegistry
 from shoprl.platform.scheduler import ResourceConfig, Scheduler
 from shoprl.platform.store import JobStore
 from shoprl.platform.traj_store import TrajectoryStore
@@ -43,4 +44,5 @@ __all__ = ["JobState", "Job", "can_transition", "TERMINAL",
            "FailureClass", "RecoveryAction", "RecoveryController",
            "RecoveryEvent", "BatchPlan", "SimulatedOOM", "classify",
            "Scheduler", "ResourceConfig", "PolicyRegistry", "PolicyVersion",
-           "PolicyClient", "staleness", "staleness_report"]
+           "PolicyClient", "staleness", "staleness_report",
+           "PromptRegistry", "PromptDatasetMeta"]
