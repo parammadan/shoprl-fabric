@@ -119,9 +119,11 @@ class TrainingJobCreate(BaseModel):
     resource: str = "gpu"
 
 
-def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
+def create_app(root: str | Path, runs_dir: str | Path = "runs",
+               comparisons_dir: str | Path = "comparisons") -> FastAPI:
     root = Path(root)
     runs_dir = Path(runs_dir)
+    comparisons_dir = Path(comparisons_dir)
     jobs_db = str(root / "jobs.db")
     registry_db = str(root / "registry.db")
     app = FastAPI(title="ShopRL Fabric Platform API", version="1.0")
@@ -410,6 +412,41 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
                         "reward": t.reward, "kind": t.kind})
         return out
 
+    @app.get("/metrics-runs")
+    def metrics_runs() -> list[str]:
+        """Run dirs under runs_dir that have a metrics.jsonl (single-run health
+        source). Read-only."""
+        if not runs_dir.exists():
+            return []
+        return sorted(d.name for d in runs_dir.iterdir()
+                      if (d / "metrics.jsonl").exists())
+
+    @app.get("/comparisons")
+    def comparisons() -> list[dict]:
+        """Committed PPO/GRPO/RLOO comparison artifacts (historical, measured),
+        each enriched with server-side alert counts (via observability.alerts —
+        the SAME rules the trainer dashboard used). This is where the RLOO 0.015
+        / GRPO 0.58 / PPO 6.78 KL numbers and the PPO critical-KL alert count
+        come from. Nothing fabricated; empty list if no artifacts."""
+        out = []
+        for c in dash_data.comparisons(comparisons_dir):
+            crit = warn = 0
+            by_rule: dict[str, int] = {}
+            # check_run() already folds in per-step check_step() over step_metrics
+            # plus run-level checks — use it alone (don't double-count).
+            for a in alerts_mod.check_run(c):
+                by_rule[a.rule] = by_rule.get(a.rule, 0) + 1
+                crit += a.level == alerts_mod.Level.CRITICAL
+                warn += a.level == alerts_mod.Level.WARNING
+            out.append({
+                "algorithm": c["algorithm"], "final_kl": c.get("final_kl"),
+                "max_kl": c.get("max_kl"), "reward_gain": c.get("reward_gain"),
+                "stability_failures": c.get("stability_failures"),
+                "step_metrics": c.get("step_metrics", []),
+                "alerts": {"critical": crit, "warning": warn, "by_rule": by_rule},
+                "source": c.get("_source")})
+        return out
+
     @app.get("/runs/{run_id}/alerts")
     def run_alerts(run_id: str) -> dict:
         if "/" in run_id or run_id in ("", ".", ".."):
@@ -449,4 +486,5 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
 
 # Module-level app for `uvicorn shoprl.platform.api:app`.
 app = create_app(os.environ.get("SHOPRL_ROOT", "runs/pipeline"),
-                 os.environ.get("SHOPRL_RUNS", "runs"))
+                 os.environ.get("SHOPRL_RUNS", "runs"),
+                 os.environ.get("SHOPRL_COMPARISONS", "comparisons"))

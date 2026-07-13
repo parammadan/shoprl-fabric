@@ -109,14 +109,98 @@ def overview_panel(api: ApiClient) -> None:
     if rs.get("count"):
         st.caption(f"{rs['count']} trajectories · reward mean {rs['mean']:.3f} "
                    f"(min {rs['min']:.3f} / max {rs['max']:.3f})")
-    evs = ov["recovery_events"]
-    if evs:
-        st.markdown("**Recovery events**")
-        st.dataframe(pd.DataFrame([{
-            "class": e.get("failure_class"), "action": e.get("action"),
-            "trigger": "SIMULATED" if e.get("simulated") else "real",
-            "result": e.get("resulting_state")} for e in evs]),
-            hide_index=True, use_container_width=True)
+
+
+def recovery_panel(api: ApiClient) -> None:
+    st.subheader("Recovery events")
+    st.caption("OOM is triggered by SimulatedOOM and labelled — a laptop cannot "
+               "produce a real CUDA OOM. Recovery logic is real.")
+    evs = api.overview()["recovery_events"]
+    if not evs:
+        st.info("No recovery events. Trigger one from DEV MODE in the sidebar.")
+        return
+    st.dataframe(pd.DataFrame([{
+        "class": e.get("failure_class"), "action": e.get("action"),
+        "microbatch": (f"{e.get('microbatch_before')}->{e.get('microbatch_after')}"
+                       if e.get("microbatch_after") is not None else "—"),
+        "restored": e.get("restored_ckpt") or "—",
+        "result": e.get("resulting_state"),
+        "trigger": "SIMULATED" if e.get("simulated") else "real"} for e in evs]),
+        hide_index=True, use_container_width=True)
+
+
+def training_health_panel(api: ApiClient) -> None:
+    st.subheader("Training Health")
+    st.caption("Run- and training-step-level metrics (KL is never per-trajectory). "
+               "Comparison overlays are HISTORICAL committed artifacts; the "
+               "single-run section is the most recent persisted run.")
+
+    # --- PPO / GRPO / RLOO comparison overlays (historical) ---
+    st.markdown("### PPO / GRPO / RLOO comparison — historical (committed artifacts)")
+    comps = api.comparisons()
+    if comps:
+        tbl = pd.DataFrame([{
+            "algorithm": c["algorithm"], "final_kl": c["final_kl"], "max_kl": c["max_kl"],
+            "reward_gain": c["reward_gain"], "stability_failures": c["stability_failures"],
+            "critical_alerts": c["alerts"]["critical"], "source": c["source"]}
+            for c in comps])
+        st.dataframe(tbl, hide_index=True, use_container_width=True)
+        kl = {c["algorithm"]: c["final_kl"] for c in comps}
+        if all(k in kl for k in ("rloo", "grpo", "ppo")):
+            st.caption(f"Measured final KL — RLOO {kl['rloo']:.3f} ≪ "
+                       f"GRPO {kl['grpo']:.3f} ≪ PPO {kl['ppo']:.2f}")
+        ppo = next((c for c in comps if c["algorithm"] == "ppo"), None)
+        if ppo and ppo["alerts"]["critical"]:
+            st.error(f"PPO critical KL alerts: {ppo['alerts']['critical']} "
+                     f"({ppo['alerts']['by_rule'].get('kl_blowup', 0)} kl_blowup) "
+                     "— from persisted step_metrics")
+        for metric, label in [("kl", "KL vs reference"), ("entropy", "Entropy"),
+                              ("clip_frac", "Clip fraction"), ("grad_norm", "Grad norm"),
+                              ("reward_mean", "Reward mean")]:
+            series = {c["algorithm"]: pd.Series([m.get(metric) for m in c["step_metrics"]])
+                      for c in comps if any(m.get(metric) is not None for m in c["step_metrics"])}
+            if series:
+                st.markdown(f"**{label}** (per training step)")
+                st.line_chart(pd.DataFrame(series), height=220)
+    else:
+        st.info("No comparison artifacts found (comparisons/*.json). Nothing invented.")
+
+    st.divider()
+    # --- single-run health (most recent persisted metrics.jsonl) ---
+    st.markdown("### Single run — most recent persisted metrics")
+    runs = api.metrics_runs()
+    if not runs:
+        st.info("No run metrics.jsonl found under the runs dir.")
+        return
+    sel = st.selectbox("Run (from metrics.jsonl)", runs, key="th_run")
+    m = api.run_metrics(sel)
+    rows = m["metrics"] if m else []
+    if rows:
+        df = pd.DataFrame(rows)
+        if "reward_mean" in df:
+            band = pd.DataFrame({"reward_mean": df["reward_mean"]})
+            if "reward_std" in df:
+                band["reward_+std"] = df["reward_mean"] + df["reward_std"]
+                band["reward_-std"] = df["reward_mean"] - df["reward_std"]
+            st.markdown("**Reward mean ± std**")
+            st.line_chart(band, height=220)
+        singles = [(k, lbl) for k, lbl in [("kl", "KL vs reference"), ("entropy", "Entropy"),
+                   ("clip_frac", "Clip fraction"), ("grad_norm", "Grad norm")] if k in df]
+        for k, lbl in singles:
+            st.markdown(f"**{lbl}**")
+            st.line_chart(df[[k]], height=200)
+        comp_keys = [k for k in ("reward_budget", "reward_groundedness", "reward_coverage",
+                     "reward_quality_format", "reward_quality_comparison") if k in df]
+        if comp_keys:
+            st.markdown("**Per-component rewards**")
+            st.line_chart(df[comp_keys], height=220)
+    al = api.run_alerts(sel)
+    st.markdown("**Alerts (active + historical for this run)**")
+    if al and al["n_alerts"]:
+        st.error(f"{al['n_alerts']} alert(s) · max level {al['max_level']}")
+        st.dataframe(pd.DataFrame(al["alerts"]), hide_index=True, use_container_width=True)
+    elif al is not None:
+        st.success("No alerts for this run.")
 
 
 def scheduler_panel(api: ApiClient) -> None:
@@ -249,24 +333,29 @@ def main() -> None:
         st.error(f"API unreachable: {e}")
         return
 
-    @st.fragment(run_every=cfg["interval"] if cfg["live"] else None)
-    def _live():
-        overview_panel(api)
-        scheduler_panel(api)
-    _live()
-
-    st.divider()
-    tabs = st.tabs(["Jobs", "Experiments", "Policies", "Checkpoints", "Trajectories"])
-    with tabs[0]:
-        jobs_panel(api)
+    tabs = st.tabs(["Overview", "Jobs", "Training Health", "Experiments",
+                    "Policies", "Checkpoints", "Trajectories", "Recovery"])
+    with tabs[0]:                                     # live overview + scheduler
+        @st.fragment(run_every=cfg["interval"] if cfg["live"] else None)
+        def _live():
+            overview_panel(api)
+            scheduler_panel(api)
+            st.caption("🟢 live" if cfg["live"] else "⏸ paused — toggle in sidebar")
+        _live()
     with tabs[1]:
-        experiments_panel(api)
+        jobs_panel(api)
     with tabs[2]:
-        policies_panel(api)
+        training_health_panel(api)
     with tabs[3]:
-        checkpoints_panel(api)
+        experiments_panel(api)
     with tabs[4]:
+        policies_panel(api)
+    with tabs[5]:
+        checkpoints_panel(api)
+    with tabs[6]:
         trajectory_panel(api)
+    with tabs[7]:
+        recovery_panel(api)
 
 
 def _has_streamlit_context() -> bool:

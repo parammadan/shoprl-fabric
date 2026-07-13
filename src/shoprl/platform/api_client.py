@@ -91,6 +91,12 @@ class ApiClient:
     def run_alerts(self, run_id: str) -> dict | None:
         return self._get(f"/runs/{run_id}/alerts", optional=True)
 
+    def metrics_runs(self) -> list:
+        return self._get("/metrics-runs")
+
+    def comparisons(self) -> list:
+        return self._get("/comparisons")
+
     def compare_runs(self, ids: list[str]) -> dict:
         return self._get("/runs/compare", ids=",".join(ids))
 
