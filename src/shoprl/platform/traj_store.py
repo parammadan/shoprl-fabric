@@ -109,3 +109,22 @@ class TrajectoryStore:
     def count(self) -> int:
         return self.conn.execute(
             "SELECT COUNT(*) c FROM trajectories").fetchone()["c"]
+
+    def reward_stats(self) -> dict:
+        """Aggregate reward distribution over all persisted trajectories (for
+        the dashboard). Reads the indexed reward column directly."""
+        vals = [r["reward"] for r in self.conn.execute(
+            "SELECT reward FROM trajectories WHERE reward IS NOT NULL").fetchall()]
+        if not vals:
+            return {"count": 0}
+        n = len(vals)
+        mean = sum(vals) / n
+        return {"count": n, "min": min(vals), "mean": mean, "max": max(vals)}
+
+    def reward_by_policy(self) -> list[tuple[str, float, int]]:
+        """(policy_id, mean_reward, n) per policy version, oldest first."""
+        rows = self.conn.execute(
+            "SELECT policy_id, AVG(reward) m, COUNT(*) n FROM trajectories "
+            "WHERE reward IS NOT NULL GROUP BY policy_id ORDER BY MIN(created_at)"
+        ).fetchall()
+        return [(r["policy_id"], r["m"], r["n"]) for r in rows]

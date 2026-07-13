@@ -141,7 +141,7 @@ def test_local_pool_drains_queue_across_processes(tmp_path):
     ids = [s.create("echo", {"i": i}).id for i in range(n)]
     s.close()
 
-    run_local_pool(path, n_workers=3, handler_names=["echo"])
+    run_local_pool(path, n_workers=3, handlers={"echo": "echo"})
 
     s2 = JobStore(path)
     assert s2.counts() == {"succeeded": n}              # all done, none lost/stuck

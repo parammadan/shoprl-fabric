@@ -18,6 +18,7 @@ something measured here.
 """
 from __future__ import annotations
 
+import importlib
 import multiprocessing as mp
 import time
 from typing import Callable
@@ -84,10 +85,20 @@ def _echo_handler(job: Job) -> dict:
 _HANDLER_REGISTRY: dict[str, Handler] = {"echo": _echo_handler}
 
 
-def _pool_worker_entry(db_path: str, handler_names: list[str],
+def _resolve_handler(spec: str) -> Handler:
+    """A handler spec is either a registry name ("echo") or a dotted import
+    path "module:function" — the latter lets any module (e.g. the pipeline)
+    supply handlers to a spawned worker without a shared registry."""
+    if ":" in spec:
+        mod, fn = spec.split(":", 1)
+        return getattr(importlib.import_module(mod), fn)
+    return _HANDLER_REGISTRY[spec]
+
+
+def _pool_worker_entry(db_path: str, handler_specs: dict[str, str],
                        lease_seconds: float, name: str) -> None:
     store = JobStore(db_path)
-    handlers = {k: _HANDLER_REGISTRY[k] for k in handler_names}
+    handlers = {kind: _resolve_handler(spec) for kind, spec in handler_specs.items()}
     try:
         Worker(store, handlers, lease_seconds=lease_seconds, name=name).run_forever(
             drain_and_exit=True)
@@ -96,15 +107,16 @@ def _pool_worker_entry(db_path: str, handler_names: list[str],
 
 
 def run_local_pool(db_path: str, n_workers: int = 3,
-                   handler_names: list[str] | None = None,
+                   handlers: dict[str, str] | None = None,
                    lease_seconds: float = 30.0) -> None:
     """Spawn `n_workers` LOCAL processes that drain the queue in `db_path` and
-    exit. Producers must have already created the jobs. This demonstrates
+    exit. `handlers` maps a job kind -> a handler spec (registry name or
+    "module:func"). Producers must have already created the jobs. Demonstrates
     concurrency-safe claiming across real OS processes on one machine."""
-    handler_names = handler_names or ["echo"]
+    handlers = handlers or {"echo": "echo"}
     ctx = mp.get_context("spawn")
     procs = [ctx.Process(target=_pool_worker_entry,
-                         args=(db_path, handler_names, lease_seconds, f"w{i}"))
+                         args=(db_path, handlers, lease_seconds, f"w{i}"))
              for i in range(n_workers)]
     for p in procs:
         p.start()
