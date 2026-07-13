@@ -27,6 +27,7 @@ from shoprl.platform.artifacts import (Artifact, ArtifactRegistry,
                                        ArtifactType)
 from shoprl.platform.checkpoints import (CheckpointCorrupt, CheckpointRegistry,
                                          Manifest)
+from shoprl.platform.integration import PlatformRun, cost_estimate
 from shoprl.platform.failures import (BatchPlan, FailureClass, RecoveryAction,
                                       RecoveryController, RecoveryEvent,
                                       SimulatedOOM, classify)
@@ -48,4 +49,5 @@ __all__ = ["JobState", "Job", "can_transition", "TERMINAL",
            "Scheduler", "ResourceConfig", "PolicyRegistry", "PolicyVersion",
            "PolicyClient", "staleness", "staleness_report",
            "PromptRegistry", "PromptDatasetMeta",
-           "ArtifactRegistry", "Artifact", "ArtifactType"]
+           "ArtifactRegistry", "Artifact", "ArtifactType",
+           "PlatformRun", "cost_estimate"]
