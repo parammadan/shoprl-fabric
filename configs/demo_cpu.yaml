@@ -1,0 +1,35 @@
+# CPU proof of the SAME real-training platform path as demo_gpu.yaml, sized to
+# complete on an 8GB M1 (device cpu — MPS thrashes on training backward at 8GB).
+# Writes real per-step KL/reward/entropy to runs/shoprl-demo/metrics.jsonl.
+# For the real watchable demo use demo_gpu.yaml on a T4/A10G.
+experiment:
+  name: shoprl-demo
+  seed: 0
+
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: float32
+  device: cpu
+
+algorithm: grpo
+
+rollout:
+  engine: hf
+  max_new_tokens: 24
+  temperature: 1.1
+  top_p: 0.98
+  num_samples: 4
+
+training:
+  steps: 4
+  prompts_per_step: 1
+  lr: 1.0e-5
+  clip_eps: 0.2
+  beta: 0.04
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  catalog_size: 300
+  shortlist: 4
+  ckpt_dir: checkpoints
+  save_every: 1000
