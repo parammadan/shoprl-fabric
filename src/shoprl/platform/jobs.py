@@ -74,6 +74,10 @@ class Job:
     error: str | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    # Pillar 2: a worker holds a time-bounded LEASE while RUNNING. If the worker
+    # dies without completing/renewing, the lease expires and a reaper requeues
+    # the job. NULL whenever the job is not actively claimed.
+    lease_expires_at: float | None = None
 
     @property
     def is_terminal(self) -> bool:
