@@ -73,7 +73,6 @@ def heldout_eval(trainer, n_prompts: int, num_samples: int,
 
 def _build_result(config, before, after, step_metrics) -> dict:
     kl_traj = [m["kl"] for m in step_metrics]
-    step_reward_stds = [m["reward_std"] for m in step_metrics]
     return {
         "algorithm": config.algorithm,
         "steps": config.training.steps,
@@ -88,6 +87,83 @@ def _build_result(config, before, after, step_metrics) -> dict:
         "max_kl": max(kl_traj) if kl_traj else None,
         "kl_trajectory": kl_traj,
     }
+
+
+def run_experiment(config, n_prompts: int, num_samples: int) -> dict:
+    """Pure training core (no platform coupling): build trainer -> before-eval
+    -> train -> serialise the adapter to a TEMP dir -> after-eval with samples.
+    Returns {checkpoint_dir (temp, caller owns/ingests), result, samples}. Called
+    by the CLI and the control-plane worker so there is ONE real training path."""
+    import json as _json
+    import tempfile
+
+    from shoprl.platform.gpu import gpu_telemetry
+
+    trainer = build_trainer(config)
+    steps = config.training.steps
+    before = heldout_eval(trainer, n_prompts, num_samples)
+    step_metrics = trainer.train()
+
+    tmp = tempfile.mkdtemp(prefix="shoprl-ckpt-")
+    trainer.model.save_pretrained(tmp)
+    with open(f"{tmp}/train_state.json", "w") as f:
+        _json.dump({"step": steps, "model": config.model.name}, f)
+
+    after = heldout_eval(trainer, n_prompts, num_samples, collect_samples=True)
+    result = _build_result(config, before,
+                           {k: v for k, v in after.items() if k != "_samples"},
+                           step_metrics)
+    result.update({
+        "train_time_s": getattr(trainer, "train_time_s", None),
+        "tokens_per_sec": getattr(trainer, "tokens_per_sec", None),
+        "peak_mem_gb": getattr(trainer, "peak_mem_gb", None),
+        "gpu": gpu_telemetry(),
+        "mean_rollout_reward_std": statistics.mean(
+            [m["reward_std"] for m in step_metrics]) if step_metrics else 0.0,
+        "stability_failures": trainer.stability_failures,
+        "step_metrics": step_metrics,
+    })
+    return {"checkpoint_dir": tmp, "result": result, "samples": after.get("_samples", [])}
+
+
+def run_through_platform(config, n_prompts: int, num_samples: int, root, *,
+                         gpu_mem_gb=None, skip_preflight=False, runner=run_experiment) -> dict:
+    """The ONE platform-wired training path (used by the CLI and the control
+    worker): preflight -> register run + dataset -> [train via runner] ->
+    register checkpoint (registry = sole writer) -> publish policy -> tag
+    trajectories -> finish. Returns run refs + result."""
+    import shutil
+
+    from shoprl.platform.integration import PlatformRun, cost_estimate
+    from shoprl.platform.registry import RunStatus
+
+    pr = PlatformRun(config, root)
+    out = None
+    try:
+        if not skip_preflight:
+            pr.preflight(gpu_mem_gb=gpu_mem_gb).raise_if_failed()
+        pr.start(n_prompts=n_prompts)
+        out = runner(config, n_prompts, num_samples)      # produce ckpt dir + result + samples
+        manifest = pr.register_checkpoint(out["checkpoint_dir"], step=config.training.steps)
+        pv = pr.publish_policy(out["checkpoint_dir"],
+                               metadata={"step": config.training.steps,
+                                         "algorithm": config.algorithm})
+        for s in out["samples"]:                          # tag eval trajectories -> v{n}
+            pr.tag_trajectory(s["prompt"], s["response"], s["reward"],
+                              components=s["components"], prompt_id=s["prompt_id"])
+        result = out["result"]
+        pr.finish(RunStatus.SUCCEEDED, eval_result=result,
+                  best_checkpoint=manifest.ckpt_id,
+                  cost_estimate=cost_estimate(result.get("train_time_s")))
+        return {"run_id": pr.run.run_id, "best_checkpoint": manifest.ckpt_id,
+                "policy_version": pv.version, "result": result}
+    except Exception as e:
+        pr.fail(repr(e))
+        raise
+    finally:
+        pr.close()
+        if out and out.get("checkpoint_dir"):
+            shutil.rmtree(out["checkpoint_dir"], ignore_errors=True)
 
 
 def main() -> None:
@@ -106,75 +182,32 @@ def main() -> None:
     args = ap.parse_args()
 
     config = load_config(args.config)
-    from shoprl.platform.integration import PlatformRun, cost_estimate
-    from shoprl.platform.registry import RunStatus
 
-    pr = None
-    if not args.no_platform:
+    if args.no_platform:
+        import shutil
+        out = run_experiment(config, args.n_prompts, args.num_samples)
+        result = out["result"]
+        dst = os.path.join(config.training.ckpt_dir, f"step-{config.training.steps}")
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(out["checkpoint_dir"], dst)       # legacy persistent checkpoint
+        shutil.rmtree(out["checkpoint_dir"], ignore_errors=True)
+    else:
         root = args.platform_root or os.path.join("runs", config.experiment.name, "platform")
-        pr = PlatformRun(config, root)
-        if not args.skip_preflight:
-            report = pr.preflight(gpu_mem_gb=args.gpu_mem_gb)
-            for c in report.checks:
-                print(f"[preflight] {'PASS' if c.ok else 'FAIL'} {c.name}: {c.detail}")
-            report.raise_if_failed()          # abort before allocating anything
-        pr.start(n_prompts=args.n_prompts)
-        print(f"[run] registered run {pr.run.run_id} (config {pr.run.config_hash}, "
-              f"dataset {pr.run.dataset_version})")
-
-    try:
-        trainer = build_trainer(config)
         print(f"[run] algorithm={config.algorithm} steps={config.training.steps} "
-              f"device={trainer.device}")
-        before = heldout_eval(trainer, args.n_prompts, args.num_samples)
-        print(f"[run] before: {before['reward_mean']:+.3f} ± {before['reward_std']:.3f}")
+              f"-> platform root {root}")
+        ref = run_through_platform(config, args.n_prompts, args.num_samples, root,
+                                   gpu_mem_gb=args.gpu_mem_gb, skip_preflight=args.skip_preflight)
+        result = ref["result"]
+        print(f"[run] run {ref['run_id']} · checkpoint {ref['best_checkpoint']} · "
+              f"policy v{ref['policy_version']}")
 
-        step_metrics = trainer.train()
-        ckpt_dir = trainer.save_checkpoint(config.training.steps)
-
-        after = heldout_eval(trainer, args.n_prompts, args.num_samples,
-                             collect_samples=pr is not None)
-        print(f"[run] after:  {after['reward_mean']:+.3f} ± {after['reward_std']:.3f}")
-
-        result = _build_result(config, before,
-                               {k: v for k, v in after.items() if k != "_samples"},
-                               step_metrics)
-        result.update({
-            "train_time_s": getattr(trainer, "train_time_s", None),
-            "tokens_per_sec": getattr(trainer, "tokens_per_sec", None),
-            "peak_mem_gb": getattr(trainer, "peak_mem_gb", None),
-            "mean_rollout_reward_std": statistics.mean(
-                [m["reward_std"] for m in step_metrics]) if step_metrics else 0.0,
-            "stability_failures": trainer.stability_failures,
-            "step_metrics": step_metrics,
-        })
-
-        if pr is not None:
-            manifest = pr.register_checkpoint(ckpt_dir)      # atomic + verified
-            pv = pr.publish_policy(ckpt_dir, metadata={"step": config.training.steps,
-                                                       "algorithm": config.algorithm})
-            for s in after.get("_samples", []):              # tag trajectories -> vN
-                pr.tag_trajectory(s["prompt"], s["response"], s["reward"],
-                                  components=s["components"], prompt_id=s["prompt_id"])
-            pr.finish(RunStatus.SUCCEEDED, eval_result=result,
-                      best_checkpoint=manifest.ckpt_id,
-                      cost_estimate=cost_estimate(result["train_time_s"]))
-            print(f"[run] checkpoint {manifest.ckpt_id} · policy v{pv.version} · "
-                  f"{len(after.get('_samples', []))} trajectories tagged v{pv.version}")
-
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        with open(args.out, "w") as f:
-            json.dump(result, f, indent=2)
-        t = result["train_time_s"]
-        print(f"[run] gain={result['reward_gain']:+.3f} final_kl={result['final_kl']} "
-              f"time={t:.0f}s -> {args.out}" if t else f"[run] -> {args.out}")
-    except Exception as e:
-        if pr is not None:
-            pr.fail(repr(e))
-        raise
-    finally:
-        if pr is not None:
-            pr.close()
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w") as f:
+        json.dump(result, f, indent=2)
+    t = result.get("train_time_s")
+    print(f"[run] gain={result['reward_gain']:+.3f} final_kl={result['final_kl']} "
+          + (f"time={t:.0f}s " if t else "") + f"-> {args.out}")
 
 
 if __name__ == "__main__":

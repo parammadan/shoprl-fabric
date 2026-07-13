@@ -101,14 +101,23 @@ class PlatformRun:
     # 5. tag trajectories with the policy version ------------------------
     def tag_trajectory(self, prompt: str, response: str, reward: float, *,
                        components: dict | None = None, advantage: float | None = None,
-                       prompt_id: str | None = None) -> Trajectory:
-        pid = f"v{self.policy_version}" if self.policy_version is not None else "v0"
+                       prompt_id: str | None = None, generated_version: int | None = None,
+                       max_staleness: int = 0, stale_mode: str = "warn") -> Trajectory:
+        """Persist a trajectory tagged with the policy version that GENERATED it
+        (defaults to the current published version — i.e. on-policy). Runs the
+        staleness gate so a lagging rollout is flagged/rejected."""
+        from shoprl.platform.policy import staleness_gate
+        gen_v = self.policy_version if generated_version is None else generated_version
+        gen_v = 0 if gen_v is None else gen_v
+        s, warn = staleness_gate(self.policy_version or gen_v, gen_v,
+                                 max_staleness=max_staleness, mode=stale_mode)
         traj = Trajectory(
             kind="single_turn", prompt=prompt, reward=reward,
             steps=[TrajectoryStep(index=0, action=response, reward=reward)],
-            lineage=Lineage(policy_id=pid, job_id=self.run.run_id, prompt_id=prompt_id,
-                            seed=self.cfg.experiment.seed),
-            meta={"reward_components": components, "advantage": advantage})
+            lineage=Lineage(policy_id=f"v{gen_v}", job_id=self.run.run_id,
+                            prompt_id=prompt_id, seed=self.cfg.experiment.seed),
+            meta={"reward_components": components, "advantage": advantage,
+                  "staleness": s, "staleness_warning": warn})
         return self.traj.put(traj)
 
     # 6. finish + record eval report -------------------------------------

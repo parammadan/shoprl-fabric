@@ -31,8 +31,10 @@ from shoprl.platform.integration import PlatformRun, cost_estimate
 from shoprl.platform.failures import (BatchPlan, FailureClass, RecoveryAction,
                                       RecoveryController, RecoveryEvent,
                                       SimulatedOOM, classify)
-from shoprl.platform.policy import (PolicyClient, PolicyRegistry,
-                                    PolicyVersion, staleness, staleness_report)
+from shoprl.platform.gpu import gpu_telemetry
+from shoprl.platform.policy import (PolicyClient, PolicyRegistry, PolicyVersion,
+                                    StaleTrajectory, staleness, staleness_gate,
+                                    staleness_report)
 from shoprl.platform.prompt_registry import PromptDatasetMeta, PromptRegistry
 from shoprl.platform.scheduler import ResourceConfig, Scheduler
 from shoprl.platform.store import JobStore
@@ -50,4 +52,5 @@ __all__ = ["JobState", "Job", "can_transition", "TERMINAL",
            "PolicyClient", "staleness", "staleness_report",
            "PromptRegistry", "PromptDatasetMeta",
            "ArtifactRegistry", "Artifact", "ArtifactType",
-           "PlatformRun", "cost_estimate"]
+           "PlatformRun", "cost_estimate", "gpu_telemetry",
+           "StaleTrajectory", "staleness_gate"]

@@ -110,6 +110,15 @@ class ArtifactCreate(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class TrainingJobCreate(BaseModel):
+    config_path: str = Field(min_length=1)
+    n_prompts: int = Field(default=64, ge=1)
+    num_samples: int = Field(default=2, ge=1)
+    gpu_mem_gb: float | None = None
+    priority: int = 0
+    resource: str = "gpu"
+
+
 def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
     root = Path(root)
     runs_dir = Path(runs_dir)
@@ -350,6 +359,29 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
             return dash_data.trajectory_detail(root, traj_id)
         except TrajectoryNotFound:
             raise HTTPException(404, f"trajectory {traj_id} not found")
+
+    # --- training jobs (control plane) -----------------------------------
+    @app.post("/training-jobs", response_model=JobOut, status_code=201)
+    def submit_training_job(body: TrainingJobCreate) -> JobOut:
+        from shoprl.platform.control import submit_training
+        s = _job_store()
+        try:
+            job = submit_training(s, body.config_path, n_prompts=body.n_prompts,
+                                  num_samples=body.num_samples, gpu_mem_gb=body.gpu_mem_gb,
+                                  platform_root=str(root), priority=body.priority,
+                                  resource=body.resource)
+            return JobOut.of(job)
+        finally:
+            s.close()
+
+    @app.get("/training-jobs", response_model=list[JobOut])
+    def list_training_jobs():
+        from shoprl.platform.control import TRAIN_KIND
+        s = _job_store()
+        try:
+            return [JobOut.of(j) for j in s.list() if j.kind == TRAIN_KIND]
+        finally:
+            s.close()
 
     # --- operational reads (for the ops console) -------------------------
     @app.get("/scheduler")
