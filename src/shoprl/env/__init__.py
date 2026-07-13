@@ -9,6 +9,8 @@ This module is the SIMULATOR only (state, actions, transitions, episode). The
 trajectory reward + credit assignment is built separately (taught step by step);
 nothing here is wired into training yet.
 """
+from shoprl.env.reward import assign_credit, episode_reward
 from shoprl.env.shopenv import Action, EnvState, Goal, ShopEnv, parse_action
 
-__all__ = ["Action", "EnvState", "Goal", "ShopEnv", "parse_action"]
+__all__ = ["Action", "EnvState", "Goal", "ShopEnv", "parse_action",
+           "episode_reward", "assign_credit"]
