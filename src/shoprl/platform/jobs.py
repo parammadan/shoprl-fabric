@@ -27,6 +27,7 @@ from enum import Enum
 class JobState(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"              # operator-held; excluded from claiming
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     RETRYING = "retrying"
@@ -36,8 +37,10 @@ class JobState(str, Enum):
 
 # The allowed transition graph. Anything not listed is illegal.
 _TRANSITIONS: dict[JobState, set[JobState]] = {
-    JobState.PENDING: {JobState.RUNNING, JobState.CANCELLED},
-    JobState.RUNNING: {JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED},
+    JobState.PENDING: {JobState.RUNNING, JobState.PAUSED, JobState.CANCELLED},
+    JobState.RUNNING: {JobState.SUCCEEDED, JobState.FAILED, JobState.PAUSED,
+                       JobState.CANCELLED},
+    JobState.PAUSED: {JobState.PENDING, JobState.CANCELLED},  # resume / cancel
     JobState.FAILED: {JobState.RETRYING, JobState.DEAD_LETTER},
     JobState.RETRYING: {JobState.PENDING, JobState.DEAD_LETTER},
     JobState.SUCCEEDED: set(),     # terminal
