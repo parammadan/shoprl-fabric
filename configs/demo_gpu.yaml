@@ -1,40 +1,59 @@
-# Watchable REAL training on ONE small GPU (T4 16GB or A10G 24GB).
-# Runs genuine Qwen3-0.6B generation -> rule reward -> GRPO optimizer step, with
-# real per-step KL / reward / entropy written to runs/shoprl-demo/metrics.jsonl,
-# and a real atomic checkpoint + policy at the end — all through the platform.
-# ~20 short steps so the curves grow while you watch (and you can trigger a
-# recovery scenario mid-run). Qwen3-0.6B is tiny — ONE GPU, never sharded.
+# Watchable REAL training on ONE small GPU (T4 16GB or A10G 24GB), tuned so the
+# curves actually MOVE (unlike the near-saturated default task).
+#
+# Why the default task went flat: the base model already scores high and
+# generates near-deterministically, so every sample in a GRPO group gets the
+# SAME reward -> within-group std 0 -> advantage 0 -> grad_norm 0 -> KL 0.
+# Three levers here restore gradient, all real (no fabricated signal):
+#   1. EXPLORATION: temperature 1.3 + top_p 0.98 + num_samples 12 + longer
+#      generations -> diverse completions -> non-zero within-group reward std.
+#   2. HARDER pick: shortlist 10 (more near-miss distractors) -> the best-pick is
+#      genuinely ambiguous, so completions differ in reward.
+#   3. REWARD WITH HEADROOM: weights tilted to the components the base model is
+#      WEAK at (comparison ~0.31, coverage ~0.75 at baseline) -> room to improve
+#      -> reward can actually climb, and varies across samples -> gradient.
+#
+# Qwen3-0.6B is tiny — ONE GPU, never sharded. Swap `algorithm: ppo` to watch a
+# dramatic KL blow-up (real instability) instead of GRPO's quieter climb.
 experiment:
   name: shoprl-demo
   seed: 0
 
 model:
   name: Qwen/Qwen3-0.6B
-  # float16 works on BOTH T4 (no bf16) and A10G. On an A10G you may switch to
-  # bfloat16 for a touch more speed/stability; leave float16 for portability.
-  dtype: float16
-  device: auto          # -> cuda on the GPU box
+  dtype: float16          # works on BOTH T4 (no bf16) and A10G
+  device: auto            # -> cuda on the GPU box
 
-algorithm: grpo         # swap to rloo / ppo to watch the KL-stability difference
+algorithm: grpo           # try rloo (stable) / ppo (KL blows up) to compare
 
 rollout:
-  engine: hf            # REAL generation (not the stub). vllm is the GPU speed
-                        # drop-in but not required for the demo.
-  max_new_tokens: 48
-  temperature: 1.0
-  top_p: 0.95
-  num_samples: 8        # GRPO group size (>=2 required)
+  engine: hf
+  max_new_tokens: 64      # more room -> more diversity
+  temperature: 1.3        # exploration -> non-zero within-group reward variance
+  top_p: 0.98
+  num_samples: 12         # bigger GRPO group -> more chance of variance/step
 
 training:
-  steps: 20             # watchable; each step is a few seconds on one GPU
-  prompts_per_step: 2   # effective batch = 2 * 8 = 16
-  lr: 1.0e-5
+  steps: 20               # watchable; seconds/step on one GPU
+  prompts_per_step: 2     # effective batch = 2 * 12 = 24
+  lr: 2.0e-5              # a touch higher so movement is visible in 20 steps
   clip_eps: 0.2
-  beta: 0.04            # KL penalty vs the frozen reference
+  beta: 0.04              # KL penalty vs the frozen reference
   max_grad_norm: 1.0
   lora_r: 8
   lora_alpha: 16
   catalog_size: 300
-  shortlist: 6
+  shortlist: 10           # harder, ambiguous best-pick
   ckpt_dir: checkpoints
-  save_every: 1000      # unused (registry is the sole checkpoint writer)
+  save_every: 1000
+
+rewards:
+  # tilt toward the base model's WEAK components (headroom + gradient); still
+  # penalise hallucination hard so it can't game the score.
+  weights:
+    budget: 0.10
+    groundedness: 0.15
+    coverage: 0.30
+    quality_format: 0.10
+    quality_comparison: 0.35
+  hallucination_penalty: 0.50
