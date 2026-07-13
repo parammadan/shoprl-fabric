@@ -52,6 +52,7 @@ class RunRecord(BaseModel):
     started_at: float | None = None
     ended_at: float | None = None
     best_checkpoint: str | None = None        # -> CheckpointRegistry ckpt_id
+    policy_version: int | None = None         # -> PolicyRegistry latest version
     eval_result: dict | None = None           # e.g. reward_before/after, final_kl
     cost_estimate: dict | None = None         # e.g. {"gpu_hours":.., "usd":..}
     created_at: float = Field(default_factory=time.time)

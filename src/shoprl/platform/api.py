@@ -36,8 +36,11 @@ from pydantic import BaseModel, Field
 
 from shoprl.platform import dash_data
 from shoprl.platform.jobs import InvalidTransition, Job, JobState
+from shoprl.platform.policy import (PolicyNotFound, PolicyRegistry,
+                                    PolicyVersion, staleness_report)
 from shoprl.platform.registry import (ExperimentRegistry, RunNotFound,
                                       RunRecord, RunStatus)
+from shoprl.platform.traj_store import TrajectoryStore
 from shoprl.platform.store import ConcurrentModification, JobNotFound, JobStore
 from shoprl.platform.traj_store import TrajectoryNotFound
 
@@ -103,6 +106,9 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
 
     def _registry() -> ExperimentRegistry:
         return ExperimentRegistry(registry_db)
+
+    def _policies() -> PolicyRegistry:
+        return PolicyRegistry(root / "policies")
 
     # --- jobs -------------------------------------------------------------
     @app.post("/jobs", response_model=JobOut, status_code=201)
@@ -235,6 +241,37 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs") -> FastAPI:
             raise HTTPException(404, f"no metrics for run {run_id}")
         rows = [json.loads(l) for l in path.open() if l.strip()]
         return RunMetricsOut(run_id=run_id, n_steps=len(rows), metrics=rows)
+
+    # --- policy registry + weight sync -----------------------------------
+    @app.get("/policies", response_model=list[PolicyVersion])
+    def list_policies():
+        return _policies().list()
+
+    @app.get("/policies/latest", response_model=PolicyVersion)
+    def latest_policy() -> PolicyVersion:
+        pv = _policies().latest()
+        if pv is None:
+            raise HTTPException(404, "no policy published yet")
+        return pv
+
+    @app.get("/policies/staleness")
+    def policy_staleness() -> dict:
+        pv = _policies().latest()
+        if pv is None:
+            raise HTTPException(404, "no policy published yet")
+        ts = TrajectoryStore(str(root / "trajectories.db"))
+        try:
+            return {"current_version": pv.version,
+                    **staleness_report(ts, pv.version)}
+        finally:
+            ts.close()
+
+    @app.get("/policies/{version}", response_model=PolicyVersion)
+    def get_policy(version: int) -> PolicyVersion:
+        try:
+            return _policies().get(version)
+        except PolicyNotFound:
+            raise HTTPException(404, f"policy v{version} not found")
 
     # --- trajectories -----------------------------------------------------
     @app.get("/trajectories/{traj_id}")
