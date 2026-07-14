@@ -34,6 +34,7 @@ export const api = {
   runAlerts: (id: string) => jOpt<any>(`/runs/${id}/alerts`),
   comparisons: () => j<any[]>("/comparisons"),
   trajectories: (limit = 200) => j<any[]>(`/trajectories?limit=${limit}`),
+  trajectory: (id: string) => j<any>(`/trajectories/${id}`),
   // dev-mode recovery
   killWorker: () => post<any>("/dev/kill-worker"),
   corruptCheckpoint: () => post<any>("/dev/corrupt-checkpoint"),

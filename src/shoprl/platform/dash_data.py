@@ -19,6 +19,7 @@ from pathlib import Path
 
 from shoprl.platform.checkpoints import CheckpointCorrupt, CheckpointRegistry
 from shoprl.platform.failures import RecoveryController, SimulatedOOM
+from shoprl.platform.jobs import JobState
 from shoprl.platform.store import JobStore
 from shoprl.platform.traj_store import TrajectoryStore
 
@@ -149,7 +150,10 @@ def sim_kill_worker(root: str | Path) -> dict:
     s = JobStore(p["jobs_db"])
     try:
         job = s.create("sim-rollout", {"note": "SIMULATION: killed-worker demo"})
-        s.claim(kinds=["sim-rollout"], lease_seconds=1.0, now=0.0)  # worker claims
+        # Deterministically claim THIS job (RUNNING) + give it a short lease, then
+        # expire it. (claim(kinds=...) could grab an older requeued sim job.)
+        s.transition(job.id, JobState.RUNNING)
+        s.renew_lease(job.id, lease_seconds=1.0, now=0.0)            # worker holds a lease
         reaped = s.reap_expired(now=10_000.0)                        # lease expired -> reap
         after = s.get(job.id)
         return {"ok": True, "job_id": job.id, "reaped": len(reaped),
@@ -169,7 +173,11 @@ def sim_oom(root: str | Path) -> dict:
     try:
         job = s.create("optimize", {"microbatch_size": 8, "grad_accum_steps": 1,
                                     "note": "SIMULATION: OOM demo"})
-        s.claim(kinds=["optimize"], now=0.0)
+        # Claim THIS job deterministically (PENDING -> RUNNING). Using
+        # claim(kinds=["optimize"]) grabbed the oldest pending optimize job,
+        # which could be a different (requeued) one -> handle() then failed on a
+        # still-PENDING job (illegal PENDING->FAILED). Transition the exact job.
+        s.transition(job.id, JobState.RUNNING)
         ctl = RecoveryController(s, registry=reg, events_path=p["events_path"])
         ev = ctl.handle(s.get(job.id), SimulatedOOM("cuda oom (SIMULATION)"))
         return {"ok": True, "job_id": job.id, "action": ev.action,
@@ -194,9 +202,10 @@ def sim_corrupt_checkpoint(root: str | Path) -> dict:
     victim = next((e for e in latest.files if not e.path.endswith("manifest.json")),
                   latest.files[0])
     fpath = Path(p["ckpt_root"]) / latest.ckpt_id / victim.path
-    data = bytearray(fpath.read_bytes())
-    data[0] ^= 0xFF                                   # flip one byte
-    fpath.write_bytes(bytes(data))
+    # Append a byte: always changes size + sha256 (never reverts on repeat,
+    # unlike an XOR flip which is its own inverse).
+    with open(fpath, "ab") as f:
+        f.write(b"\x00")
     try:
         reg.verify(latest.ckpt_id)
         status = "OK (unexpected!)"
