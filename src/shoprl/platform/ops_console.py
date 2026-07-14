@@ -341,29 +341,48 @@ def main() -> None:
         st.error(f"API unreachable: {e}")
         return
 
+    every = cfg["interval"] if cfg["live"] else None    # None = no auto-refresh
+    badge = "🟢 live" if cfg["live"] else "⏸ paused — toggle in sidebar"
     tabs = st.tabs(["Overview", "Jobs", "Training Health", "Experiments",
                     "Policies", "Checkpoints", "Trajectories", "Recovery"])
-    with tabs[0]:                                     # live overview + scheduler
-        @st.fragment(run_every=cfg["interval"] if cfg["live"] else None)
-        def _live():
-            overview_panel(api)
-            scheduler_panel(api)
-            st.caption("🟢 live" if cfg["live"] else "⏸ paused — toggle in sidebar")
-        _live()
+
+    # The live surfaces each auto-refresh on their own timer fragment, so the
+    # dashboard updates WHILE a real job runs (job state, queue depth, streaming
+    # reward/KL/entropy/grad_norm + real GPU memory, policies, checkpoints).
+    with tabs[0]:
+        @st.fragment(run_every=every)
+        def _overview():
+            overview_panel(api); scheduler_panel(api); st.caption(badge)
+        _overview()
     with tabs[1]:
-        jobs_panel(api)
+        @st.fragment(run_every=every)
+        def _jobs():
+            jobs_panel(api); st.caption(badge)
+        _jobs()
     with tabs[2]:
-        training_health_panel(api)
+        @st.fragment(run_every=every)
+        def _training_health():
+            training_health_panel(api); st.caption(badge)
+        _training_health()
     with tabs[3]:
-        experiments_panel(api)
+        experiments_panel(api)                          # interactive (selectors) — not timed
     with tabs[4]:
-        policies_panel(api)
+        @st.fragment(run_every=every)
+        def _policies():
+            policies_panel(api); st.caption(badge)
+        _policies()
     with tabs[5]:
-        checkpoints_panel(api)
+        @st.fragment(run_every=every)
+        def _checkpoints():
+            checkpoints_panel(api); st.caption(badge)
+        _checkpoints()
     with tabs[6]:
-        trajectory_panel(api)
+        trajectory_panel(api)                           # interactive (selector)
     with tabs[7]:
-        recovery_panel(api)
+        @st.fragment(run_every=every)
+        def _recovery():
+            recovery_panel(api); st.caption(badge)
+        _recovery()
 
 
 def _has_streamlit_context() -> bool:
