@@ -28,14 +28,14 @@ algorithm: grpo           # try rloo (stable) / ppo (KL blows up) to compare
 
 rollout:
   engine: hf
-  max_new_tokens: 64      # more room -> more diversity
+  max_new_tokens: 48      # room for diversity; fits A10G at batch 8
   temperature: 1.3        # exploration -> non-zero within-group reward variance
   top_p: 0.98
-  num_samples: 12         # bigger GRPO group -> more chance of variance/step
+  num_samples: 8          # GRPO group size (8 gives variance; batch 8 fits A10G)
 
 training:
   steps: 20               # watchable; seconds/step on one GPU
-  prompts_per_step: 2     # effective batch = 2 * 12 = 24
+  prompts_per_step: 1     # effective batch = 1 * 8 = 8 (proven-safe on A10G ~7GB)
   lr: 2.0e-5              # a touch higher so movement is visible in 20 steps
   clip_eps: 0.2
   beta: 0.04              # KL penalty vs the frozen reference
