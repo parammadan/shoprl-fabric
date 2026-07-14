@@ -194,6 +194,14 @@ def training_health_panel(api: ApiClient) -> None:
         if comp_keys:
             st.markdown("**Per-component rewards**")
             st.line_chart(df[comp_keys], height=220)
+        gpu_keys = [k for k in ("gpu_mem_allocated_gb", "gpu_mem_reserved_gb",
+                    "gpu_mem_max_allocated_gb") if k in df]
+        if gpu_keys:
+            st.markdown("**GPU memory (GB) — REAL, measured per step (`torch.cuda`)**")
+            st.line_chart(df[gpu_keys], height=220)
+        else:
+            st.caption("GPU memory: not recorded for this run (CPU/MPS — no CUDA). "
+                       "Real polled values appear only for CUDA runs.")
     al = api.run_alerts(sel)
     st.markdown("**Alerts (active + historical for this run)**")
     if al and al["n_alerts"]:

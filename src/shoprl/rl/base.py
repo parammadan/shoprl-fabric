@@ -170,6 +170,13 @@ class RLTrainer(ABC):
             m = self.optimize(completions, rewards_per_group)
             m.update(self._reward_components(breakdowns))
             m["step"] = step
+            # REAL measured GPU memory polled from the device this step (not an
+            # estimate). Only present when training on CUDA; omitted on CPU/MPS
+            # so the dashboard shows it as absent rather than faking a number.
+            if self.device == "cuda":
+                m["gpu_mem_allocated_gb"] = round(torch.cuda.memory_allocated() / 1e9, 3)
+                m["gpu_mem_reserved_gb"] = round(torch.cuda.memory_reserved() / 1e9, 3)
+                m["gpu_mem_max_allocated_gb"] = round(torch.cuda.max_memory_allocated() / 1e9, 3)
             metrics.append(m)
             with open(self.metrics_path, "a") as f:
                 f.write(json.dumps(m) + "\n")
