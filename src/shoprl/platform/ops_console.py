@@ -75,13 +75,31 @@ def _dev_controls() -> None:
     if c3.button("Cancel", disabled=not jid):
         _try(lambda: api.cancel(jid), "cancelled")
     st.divider()
-    if st.checkbox("Confirm: kill a worker (SIMULATION)"):
-        if st.button("💥 Kill worker"):
+    st.caption("Recovery scenarios (watch the Recovery / Jobs / Checkpoints tabs):")
+    # kill worker — REAL recovery (lease expiry + reaper requeue)
+    if st.checkbox("Confirm: kill a worker"):
+        if st.button("💥 Kill worker (REAL recovery)"):
             r = _try(api.kill_worker, "worker killed")
             if r:
-                st.info(f"SIMULATION: reaped -> {r['resulting_state']}")
-    tid = st.text_input("Trajectory id to replay (SIMULATION)")
-    if tid and st.button("🧬 Replay trajectory"):
+                st.info(f"REAL: lease expired, reaper requeued -> {r['resulting_state']}")
+    # corrupt checkpoint — REAL detection (sha256 verify)
+    if st.checkbox("Confirm: corrupt the latest checkpoint"):
+        if st.button("🧪 Corrupt checkpoint (REAL detection)"):
+            r = _try(api.corrupt_checkpoint, "checkpoint tampered")
+            if r:
+                st.info(f"REAL: {r['ckpt_id']} now **{r['integrity']}** on verify()")
+    # OOM — REAL on GPU (oversized batch), SIMULATED fallback on a laptop
+    st.markdown("**OOM recovery** — REAL on GPU (submit `configs/demo_gpu_oom.yaml` "
+                "→ genuine CUDA OOM → shrink batch + restore checkpoint + resume). "
+                "Button below is the laptop SIMULATION fallback (labelled):")
+    if st.checkbox("Confirm: simulate an OOM (laptop fallback)"):
+        if st.button("🧨 Trigger OOM (SIMULATION)"):
+            r = _try(api.sim_oom, "OOM handled")
+            if r:
+                st.info(f"SIMULATION: {r['action']}, microbatch {r['microbatch']}, "
+                        f"restore {r.get('restored_ckpt')}")
+    tid = st.text_input("Trajectory id to replay")
+    if tid and st.button("🧬 Replay trajectory (SIMULATION)"):
         r = _try(lambda: api.replay(tid), "replayed")
         if r:
             st.info(f"SIMULATION: duplicate {r['duplicate_id'][:8]}")

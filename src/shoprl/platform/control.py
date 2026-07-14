@@ -82,19 +82,95 @@ def submit_training(store: JobStore, config_path: str, *, n_prompts: int = 64,
         "platform_root": platform_root}, resource=resource, priority=priority)
 
 
-def execute_training_job(job: Job, *, runner=None) -> dict:
-    """Run one admitted training job through the platform. `job` is already
-    RUNNING (claimed by the scheduler). Returns the run refs."""
-    from shoprl.config import load_config
+def _shrink_batch(config):
+    """Halve the training batch for OOM recovery: reduce prompts_per_step first
+    (keeps the GRPO group size), then num_samples. Returns a shrunk copy, or None
+    if already at the minimum (batch can't get smaller -> genuine OOM)."""
+    tr, ro = config.training, config.rollout
+    new = config.model_copy(deep=True)
+    if tr.prompts_per_step > 1:
+        new.training.prompts_per_step = tr.prompts_per_step // 2
+    elif ro.num_samples > 2:
+        new.rollout.num_samples = ro.num_samples // 2
+    else:
+        return None
+    return new
+
+
+def _empty_cuda() -> None:
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def run_with_oom_recovery(config, n_prompts, num_samples, root, *,
+                          runner=None, max_oom_retries: int = 4, gpu_mem_gb=None) -> dict:
+    """Run training through the platform; on a REAL CUDA OutOfMemoryError (or the
+    labelled SimulatedOOM laptop fallback) recover by: shrink the batch, restore
+    the latest good checkpoint, and resume — logging a RecoveryEvent each time so
+    it shows live in the dashboard. Bounded: when the batch can't shrink further
+    it re-raises (a genuine can't-fit OOM)."""
+    import json
+    import time
+    from pathlib import Path
+
+    from shoprl.platform.checkpoints import CheckpointRegistry
+    from shoprl.platform.failures import FailureClass, classify
     from shoprl.rl.run import run_experiment, run_through_platform
+
+    runner = runner or run_experiment
+    root = Path(root)
+    ckpts = CheckpointRegistry(root / "checkpoints")
+    events = str(root / "recovery_events.jsonl")
+    cfg, resume_from = config, None
+
+    for attempt in range(max_oom_retries + 1):
+        try:
+            return run_through_platform(cfg, n_prompts, num_samples, str(root),
+                                        runner=runner, gpu_mem_gb=gpu_mem_gb,
+                                        resume_from=resume_from)
+        except BaseException as e:
+            if classify(e) is not FailureClass.OOM:
+                raise
+            simulated = type(e).__name__ == "SimulatedOOM"
+            batch_before = cfg.training.prompts_per_step * cfg.rollout.num_samples
+            new = _shrink_batch(cfg)
+            latest = ckpts.latest()
+            resume_from = str(root / "checkpoints" / latest.ckpt_id) if latest else None
+            _empty_cuda()
+            batch_after = None if new is None else new.training.prompts_per_step * new.rollout.num_samples
+            with open(events, "a") as f:                  # -> Recovery tab (live)
+                f.write(json.dumps({
+                    "ts": time.time(), "failure_class": "oom",
+                    "action": "restore_and_retry" if resume_from else "retry_with_adjustment",
+                    "microbatch_before": batch_before, "microbatch_after": batch_after,
+                    "restored_ckpt": latest.ckpt_id if latest else None,
+                    "resulting_state": "pending" if new else "dead_letter",
+                    "simulated": simulated,
+                    "message": (f"REAL CUDA OOM" if not simulated else "SIMULATED OOM")
+                               + f": batch {batch_before}->{batch_after}"
+                               + (f", restore {latest.ckpt_id}" if latest else ", no checkpoint yet")}) + "\n")
+            if new is None:
+                raise                                     # can't fit even at min batch
+            cfg = new
+
+
+def execute_training_job(job: Job, *, runner=None) -> dict:
+    """Run one admitted training job through the platform WITH OOM recovery.
+    `job` is already RUNNING (claimed by the scheduler). Returns the run refs."""
+    from shoprl.config import load_config
 
     p = job.payload
     config = load_config(p["config_path"])
     root = p.get("platform_root") or os.path.join(
         "runs", config.experiment.name, "platform")
-    return run_through_platform(
-        config, p["n_prompts"], p["num_samples"], root,
-        gpu_mem_gb=p.get("gpu_mem_gb"), runner=runner or run_experiment)
+    return run_with_oom_recovery(config, p["n_prompts"], p["num_samples"], root,
+                                 gpu_mem_gb=p.get("gpu_mem_gb"), runner=runner)
 
 
 def serve_pending(scheduler: Scheduler, *, runner=None, now: float | None = None) -> list[dict]:

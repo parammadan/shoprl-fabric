@@ -38,10 +38,12 @@ from shoprl.rollout.hf import HFRolloutEngine, _resolve_device, _resolve_dtype
 from shoprl.task import build_shortlist, build_task_prompt
 
 
-def build_policy(config: Config):
+def build_policy(config: Config, resume_from: str | None = None):
     """Load base model, wrap with LoRA. Only adapter params train; the frozen
     base doubles as the reference (LoRA starts as a no-op, so base == initial
-    policy). Returns (model, tokenizer, device)."""
+    policy). If `resume_from` is a checkpoint dir, LOAD that adapter and continue
+    from it (used by OOM recovery: restart from the last good checkpoint with a
+    smaller batch). Returns (model, tokenizer, device)."""
     device = _resolve_device(config.model.device)
     dtype = _resolve_dtype(config.model.dtype, device)
 
@@ -50,14 +52,18 @@ def build_policy(config: Config):
         tokenizer.pad_token = tokenizer.eos_token
 
     base = AutoModelForCausalLM.from_pretrained(config.model.name, dtype=dtype)
-    lora = LoraConfig(
-        r=config.training.lora_r,
-        lora_alpha=config.training.lora_alpha,
-        lora_dropout=0.0,  # keep train/eval identical -> logp is well-defined
-        target_modules="all-linear",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(base, lora).to(device)
+    if resume_from:
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(base, resume_from, is_trainable=True).to(device)
+    else:
+        lora = LoraConfig(
+            r=config.training.lora_r,
+            lora_alpha=config.training.lora_alpha,
+            lora_dropout=0.0,  # keep train/eval identical -> logp is well-defined
+            target_modules="all-linear",
+            task_type="CAUSAL_LM",
+        )
+        model = get_peft_model(base, lora).to(device)
 
     # Gradient checkpointing: recompute layer activations during backward instead
     # of storing them. The attention activations scale with T^2 across all layers

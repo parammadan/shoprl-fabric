@@ -37,10 +37,10 @@ from shoprl.task import build_shortlist, build_task_prompt
 class RLTrainer(ABC):
     name = "rl"
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, resume_from: str | None = None):
         self.config = config
         self.tr = config.training
-        self.model, self.tokenizer, self.device = build_policy(config)
+        self.model, self.tokenizer, self.device = build_policy(config, resume_from)
         self.engine = HFRolloutEngine(config, model=self.model, tokenizer=self.tokenizer)
         self.catalog = generate_catalog(n=self.tr.catalog_size, seed=config.experiment.seed)
         self.idx = catalog_index(self.catalog)

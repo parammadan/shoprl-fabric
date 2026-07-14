@@ -181,6 +181,31 @@ def sim_oom(root: str | Path) -> dict:
         s.close()
 
 
+def sim_corrupt_checkpoint(root: str | Path) -> dict:
+    """DEV: flip a byte in the latest checkpoint's data file so the registry's
+    sha256 verify() detects corruption. The corruption is real (and the detection
+    is real); we deliberately tamper to demonstrate integrity checking. The
+    Checkpoints tab's live re-check will show it as CORRUPT."""
+    p = paths(root)
+    reg = CheckpointRegistry(p["ckpt_root"])
+    latest = reg.latest()
+    if latest is None:
+        return {"ok": False, "error": "no checkpoint to corrupt"}
+    victim = next((e for e in latest.files if not e.path.endswith("manifest.json")),
+                  latest.files[0])
+    fpath = Path(p["ckpt_root"]) / latest.ckpt_id / victim.path
+    data = bytearray(fpath.read_bytes())
+    data[0] ^= 0xFF                                   # flip one byte
+    fpath.write_bytes(bytes(data))
+    try:
+        reg.verify(latest.ckpt_id)
+        status = "OK (unexpected!)"
+    except CheckpointCorrupt:
+        status = "CORRUPT"
+    return {"ok": True, "ckpt_id": latest.ckpt_id, "file": victim.path,
+            "integrity": status, "label": "DEV/SIMULATION"}
+
+
 def sim_duplicate_trajectory(root: str | Path, traj_id: str | None = None) -> dict:
     """SIMULATION: duplicate a trajectory (redelivery). Uses derive() so the
     copy is lineage-linked to its parent — demonstrating the provenance graph

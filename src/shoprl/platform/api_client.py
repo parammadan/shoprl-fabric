@@ -118,3 +118,9 @@ class ApiClient:
 
     def replay(self, traj_id: str) -> dict:
         return self._post(f"/dev/replay/{traj_id}")
+
+    def corrupt_checkpoint(self) -> dict:
+        return self._post("/dev/corrupt-checkpoint")
+
+    def sim_oom(self) -> dict:
+        return self._post("/dev/oom")

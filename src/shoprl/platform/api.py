@@ -477,6 +477,20 @@ def create_app(root: str | Path, runs_dir: str | Path = "runs",
             raise HTTPException(404, r.get("error", "cannot replay"))
         return r
 
+    @app.post("/dev/corrupt-checkpoint")
+    def dev_corrupt_checkpoint() -> dict:
+        r = dash_data.sim_corrupt_checkpoint(root)
+        if not r.get("ok"):
+            raise HTTPException(404, r.get("error", "no checkpoint"))
+        return r
+
+    @app.post("/dev/oom")
+    def dev_oom() -> dict:
+        # LAPTOP FALLBACK ONLY: raises SimulatedOOM through the RecoveryController
+        # to exercise the recovery flow where a real CUDA OOM can't occur (no GPU).
+        # The REAL OOM recovery runs automatically for a real job (control plane).
+        return dash_data.sim_oom(root)
+
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "root": str(root)}

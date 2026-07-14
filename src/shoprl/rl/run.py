@@ -89,7 +89,7 @@ def _build_result(config, before, after, step_metrics) -> dict:
     }
 
 
-def run_experiment(config, n_prompts: int, num_samples: int) -> dict:
+def run_experiment(config, n_prompts: int, num_samples: int, resume_from: str | None = None) -> dict:
     """Pure training core (no platform coupling): build trainer -> before-eval
     -> train -> serialise the adapter to a TEMP dir -> after-eval with samples.
     Returns {checkpoint_dir (temp, caller owns/ingests), result, samples}. Called
@@ -99,7 +99,7 @@ def run_experiment(config, n_prompts: int, num_samples: int) -> dict:
 
     from shoprl.platform.gpu import gpu_telemetry
 
-    trainer = build_trainer(config)
+    trainer = build_trainer(config, resume_from=resume_from)
     steps = config.training.steps
     before = heldout_eval(trainer, n_prompts, num_samples)
     step_metrics = trainer.train()
@@ -127,7 +127,8 @@ def run_experiment(config, n_prompts: int, num_samples: int) -> dict:
 
 
 def run_through_platform(config, n_prompts: int, num_samples: int, root, *,
-                         gpu_mem_gb=None, skip_preflight=False, runner=run_experiment) -> dict:
+                         gpu_mem_gb=None, skip_preflight=False, runner=run_experiment,
+                         resume_from=None) -> dict:
     """The ONE platform-wired training path (used by the CLI and the control
     worker): preflight -> register run + dataset -> [train via runner] ->
     register checkpoint (registry = sole writer) -> publish policy -> tag
@@ -143,7 +144,11 @@ def run_through_platform(config, n_prompts: int, num_samples: int, root, *,
         if not skip_preflight:
             pr.preflight(gpu_mem_gb=gpu_mem_gb).raise_if_failed()
         pr.start(n_prompts=n_prompts)
-        out = runner(config, n_prompts, num_samples)      # produce ckpt dir + result + samples
+        try:
+            out = runner(config, n_prompts, num_samples, resume_from)   # w/ resume support
+        except TypeError:
+            out = runner(config, n_prompts, num_samples)                # runner w/o resume arg
+
         manifest = pr.register_checkpoint(out["checkpoint_dir"], step=config.training.steps)
         pv = pr.publish_policy(out["checkpoint_dir"],
                                metadata={"step": config.training.steps,

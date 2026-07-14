@@ -39,8 +39,8 @@ _VALUE_COEF = 0.5
 class PPOTrainer(RLTrainer):
     name = "ppo"
 
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, resume_from=None):
+        super().__init__(config, resume_from)
         hidden = self.model.config.hidden_size
         dtype = next(self.model.parameters()).dtype
         # The critic: a scalar value head on the shared backbone.
